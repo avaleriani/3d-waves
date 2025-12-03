@@ -93,7 +93,10 @@ function createText() {
 // Droplets stick to invisible text surface
 // ============================================
 
-const MAX_DROPLETS = 8000;
+// CONTROL: Adjust droplet multiplier (higher = more droplets)
+const DROPLET_MULTIPLIER = 1.0;  // Change this: 1.0 = 15K, 2.0 = 30K, etc.
+const BASE_DROPLETS = 15000;
+const MAX_DROPLETS = Math.min(Math.floor(BASE_DROPLETS * DROPLET_MULTIPLIER), 50000); // Cap at 50K for performance
 let dropletSystem = null;
 
 // Droplet states
@@ -451,78 +454,207 @@ function updateDroplets(dt) {
 }
 
 // ============================================
-// SEA WAVE - Visual only (spawns droplets)
+// 3D OCEAN WAVE - Realistic breaking wave
 // ============================================
 
-const waveGeometry = new THREE.PlaneGeometry(40, 12, 80, 40);
+function createWaveGeometry() {
+    // Create a parametric breaking wave shape
+    const widthSegments = 100;
+    const heightSegments = 60;
+    const waveWidth = 35;
+    const waveHeight = 8;
+    
+    const geometry = new THREE.BufferGeometry();
+    const vertices = [];
+    const normals = [];
+    const uvs = [];
+    const indices = [];
+    
+    for (let j = 0; j <= heightSegments; j++) {
+        const v = j / heightSegments;
+        
+        for (let i = 0; i <= widthSegments; i++) {
+            const u = i / widthSegments;
+            
+            // X position - spread across width
+            const x = (u - 0.5) * waveWidth;
+            
+            // Wave profile - creates the curl shape
+            // v=0 is bottom, v=1 is top/curl
+            const angle = v * Math.PI * 1.3; // Curve from bottom to curl over
+            
+            // Base wave height
+            const baseY = Math.sin(angle) * waveHeight * 0.5;
+            
+            // Z depth - creates the 3D tube/curl shape
+            const curlRadius = 2.5 * (0.3 + v * 0.7); // Curl gets thicker toward top
+            const baseZ = -Math.cos(angle) * curlRadius;
+            
+            // Add variation along width
+            const widthVar = Math.sin(u * Math.PI * 4) * 0.3;
+            
+            // Final position
+            const y = baseY + widthVar;
+            const z = baseZ;
+            
+            vertices.push(x, y, z);
+            
+            // Calculate normal (approximate)
+            const nx = widthVar * 0.2;
+            const ny = Math.cos(angle);
+            const nz = Math.sin(angle);
+            const len = Math.sqrt(nx*nx + ny*ny + nz*nz);
+            normals.push(nx/len, ny/len, nz/len);
+            
+            uvs.push(u, v);
+        }
+    }
+    
+    // Create indices for triangles
+    for (let j = 0; j < heightSegments; j++) {
+        for (let i = 0; i < widthSegments; i++) {
+            const a = j * (widthSegments + 1) + i;
+            const b = a + 1;
+            const c = a + widthSegments + 1;
+            const d = c + 1;
+            
+            indices.push(a, c, b);
+            indices.push(b, c, d);
+        }
+    }
+    
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+    geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geometry.setIndex(indices);
+    
+    return geometry;
+}
+
+const waveGeometry = createWaveGeometry();
+
 const waveMaterial = new THREE.ShaderMaterial({
     uniforms: {
         time: { value: 0 },
-        opacity: { value: 0.9 }
+        envMap: { value: cubeRenderTarget.texture }
     },
     vertexShader: `
         uniform float time;
+        
         varying vec2 vUv;
-        varying float vHeight;
+        varying vec3 vNormal;
+        varying vec3 vWorldPos;
         varying float vFoam;
+        varying float vCurl;
         
         void main() {
             vUv = uv;
             vec3 pos = position;
             
-            // Primary wave - large rolling motion
-            float mainWave = sin(pos.x * 0.3 + time * 2.5) * 1.8;
+            // Animate wave motion
+            float waveMotion = sin(position.x * 0.3 + time * 2.0) * 0.4;
+            waveMotion += sin(position.x * 0.7 + time * 3.5) * 0.2;
+            pos.y += waveMotion;
             
-            // Secondary wave - faster ripples
-            float secondaryWave = sin(pos.x * 0.8 + pos.y * 0.2 + time * 4.0) * 0.6;
+            // Turbulence on surface
+            float turb = sin(pos.x * 1.5 + pos.y * 2.0 + time * 4.0) * 0.15;
+            turb += cos(pos.x * 2.0 - time * 3.0) * 0.1;
+            pos.z += turb;
             
-            // Cross waves for realism
-            float crossWave = cos(pos.y * 0.5 + time * 3.0) * 0.4;
+            // More movement at the curl (top)
+            float curlFactor = uv.y;
+            pos.y += sin(time * 5.0 + pos.x * 0.5) * curlFactor * 0.3;
+            pos.z += cos(time * 4.0 + pos.x * 0.8) * curlFactor * 0.2;
             
-            // Turbulence
-            float turb = sin(pos.x * 1.2 + pos.y * 0.8 + time * 5.5) * 0.2;
+            vCurl = curlFactor;
+            vFoam = smoothstep(0.6, 0.95, curlFactor);
             
-            // Wave crest (breaking wave effect)
-            float crestFactor = sin(pos.x * 0.3 + time * 2.5);
-            float crest = smoothstep(0.7, 1.0, crestFactor) * 0.8;
-            
-            pos.z = mainWave + secondaryWave + crossWave + turb + crest;
-            vHeight = pos.z;
-            vFoam = smoothstep(1.0, 2.0, pos.z) + crest * 0.5;
+            vNormal = normalize(normalMatrix * normal);
+            vec4 worldPos = modelMatrix * vec4(pos, 1.0);
+            vWorldPos = worldPos.xyz;
             
             gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
         }
     `,
     fragmentShader: `
         uniform float time;
-        uniform float opacity;
+        uniform samplerCube envMap;
+        
         varying vec2 vUv;
-        varying float vHeight;
+        varying vec3 vNormal;
+        varying vec3 vWorldPos;
         varying float vFoam;
+        varying float vCurl;
+        
+        // Simple noise
+        float hash(vec2 p) {
+            return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+        }
+        
+        float noise(vec2 p) {
+            vec2 i = floor(p);
+            vec2 f = fract(p);
+            f = f * f * (3.0 - 2.0 * f);
+            return mix(
+                mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
+                mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x),
+                f.y
+            );
+        }
         
         void main() {
-            vec3 deepBlue = vec3(0.01, 0.08, 0.2);
-            vec3 surfaceBlue = vec3(0.08, 0.35, 0.55);
-            vec3 foam = vec3(0.95, 0.98, 1.0);
+            vec3 normal = normalize(vNormal);
+            vec3 viewDir = normalize(cameraPosition - vWorldPos);
             
-            // Base color with depth
-            vec3 color = mix(deepBlue, surfaceBlue, smoothstep(-1.0, 1.5, vHeight));
+            // Water colors
+            vec3 deepColor = vec3(0.0, 0.05, 0.15);
+            vec3 midColor = vec3(0.02, 0.2, 0.4);
+            vec3 surfaceColor = vec3(0.1, 0.45, 0.65);
+            vec3 foamColor = vec3(0.9, 0.95, 1.0);
             
-            // Foam on wave crests
-            float foamAmount = vFoam + sin(time * 8.0 + vUv.x * 30.0) * 0.1;
-            foamAmount = smoothstep(0.3, 0.8, foamAmount);
-            color = mix(color, foam, foamAmount * 0.8);
+            // Depth gradient based on curl position
+            vec3 baseColor = mix(deepColor, midColor, vCurl * 0.5);
+            baseColor = mix(baseColor, surfaceColor, vCurl);
             
-            // Dynamic shimmer
-            float shimmer = sin(time * 6.0 + vUv.x * 25.0 + vUv.y * 15.0) * 0.15;
-            shimmer *= cos(time * 4.0 + vUv.y * 20.0) * 0.5 + 0.5;
-            color += vec3(0.15, 0.3, 0.45) * shimmer;
+            // Fresnel - edges are more reflective
+            float fresnel = pow(1.0 - max(0.0, dot(normal, viewDir)), 4.0);
             
-            // Fresnel edge highlight
-            float fresnel = pow(1.0 - vUv.y, 2.0) * 0.2;
-            color += surfaceBlue * fresnel;
+            // Environment reflection
+            vec3 reflectDir = reflect(-viewDir, normal);
+            vec3 envColor = textureCube(envMap, reflectDir).rgb;
+            baseColor = mix(baseColor, envColor, fresnel * 0.6);
             
-            gl_FragColor = vec4(color, opacity);
+            // Specular highlights
+            vec3 lightDir = normalize(vec3(0.3, 1.0, 0.5));
+            vec3 halfVec = normalize(viewDir + lightDir);
+            float spec = pow(max(0.0, dot(normal, halfVec)), 128.0);
+            baseColor += vec3(1.0) * spec * 0.9;
+            
+            // Secondary light
+            vec3 lightDir2 = normalize(vec3(-0.5, 0.8, -0.3));
+            float spec2 = pow(max(0.0, dot(normal, normalize(viewDir + lightDir2))), 64.0);
+            baseColor += vec3(0.6, 0.8, 1.0) * spec2 * 0.4;
+            
+            // Foam on curl/crest
+            float foamNoise = noise(vWorldPos.xy * 8.0 + time * 2.0);
+            foamNoise += noise(vWorldPos.xy * 15.0 - time * 3.0) * 0.5;
+            float foam = vFoam * (0.5 + foamNoise * 0.5);
+            foam += smoothstep(0.85, 1.0, vCurl) * foamNoise;
+            baseColor = mix(baseColor, foamColor, foam * 0.85);
+            
+            // Subsurface scattering hint
+            float sss = pow(max(0.0, dot(viewDir, -lightDir)), 4.0);
+            baseColor += surfaceColor * sss * 0.3 * (1.0 - vCurl);
+            
+            // Caustic shimmer in deeper parts
+            float caustic = pow(abs(sin(time * 4.0 + vWorldPos.x * 8.0) * cos(time * 3.0 + vWorldPos.y * 6.0)), 4.0);
+            baseColor += vec3(0.2, 0.4, 0.5) * caustic * 0.15 * (1.0 - vCurl);
+            
+            // Transparency - more opaque at foam, more transparent at base
+            float alpha = 0.85 + foam * 0.15;
+            alpha = mix(0.7, alpha, vCurl * 0.5 + 0.5);
+            
+            gl_FragColor = vec4(baseColor, alpha);
         }
     `,
     transparent: true,
@@ -531,7 +663,6 @@ const waveMaterial = new THREE.ShaderMaterial({
 });
 
 const waveMesh = new THREE.Mesh(waveGeometry, waveMaterial);
-waveMesh.rotation.x = -Math.PI / 2;
 scene.add(waveMesh);
 
 // ============================================
@@ -539,12 +670,27 @@ scene.add(waveMesh);
 // ============================================
 
 const waveState = {
-    z: 18,
+    z: 22,
     speed: 8,
-    spawning: false
+    spawning: false,
+    waiting: false,
+    waitTimer: 0,
+    waitDuration: 6.0  // Seconds to wait after wave passes (for droplets to drip off)
 };
 
 let lastTime = performance.now();
+
+// Count active droplets stuck/sliding on text
+function countActiveDroplets() {
+    if (!dropletSystem) return 0;
+    let count = 0;
+    for (const d of dropletSystem.droplets) {
+        if (d.active && (d.state === STUCK || d.state === SLIDING)) {
+            count++;
+        }
+    }
+    return count;
+}
 
 function animate() {
     requestAnimationFrame(animate);
@@ -554,27 +700,51 @@ function animate() {
     lastTime = now;
     const time = now * 0.001;
     
-    // Move wave from camera toward text
-    waveState.z -= waveState.speed * dt;
-    
-    // Spawn droplets when wave is near text - wider range
-    if (waveState.z < 5 && waveState.z > -3) {
-        waveState.spawning = true;
-        // Spawn LOTS of droplets per frame
-        const spawnCount = Math.floor(120 + Math.random() * 60);
-        spawnWaveDroplets(waveState.z, spawnCount);
+    // Wave state machine
+    if (waveState.waiting) {
+        // Waiting for droplets to drain off
+        waveState.waitTimer += dt;
+        
+        // Check if enough droplets have drained OR max wait time reached
+        const activeOnText = countActiveDroplets();
+        const drainedEnough = activeOnText < MAX_DROPLETS * 0.05; // 95% gone
+        const timeExpired = waveState.waitTimer > waveState.waitDuration;
+        
+        if (drainedEnough || timeExpired) {
+            // Reset wave for next cycle
+            waveState.z = 22;
+            waveState.waiting = false;
+            waveState.waitTimer = 0;
+            waveState.spawning = false;
+        }
+    } else {
+        // Move wave from camera toward text
+        waveState.z -= waveState.speed * dt;
+        
+        // Spawn droplets when wave is near text
+        if (waveState.z < 6 && waveState.z > -4) {
+            waveState.spawning = true;
+            // Spawn based on multiplier
+            const baseSpawn = Math.floor(200 + Math.random() * 100);
+            const spawnCount = Math.floor(baseSpawn * DROPLET_MULTIPLIER);
+            spawnWaveDroplets(waveState.z + 2, spawnCount);
+        }
+        
+        // Wave passed - start waiting
+        if (waveState.z < -10) {
+            waveState.waiting = true;
+            waveState.waitTimer = 0;
+            waveMesh.visible = false;
+        }
     }
     
-    // Reset wave
-    if (waveState.z < -10) {
-        waveState.z = 18;
-        waveState.spawning = false;
+    // Position 3D wave mesh
+    if (!waveState.waiting) {
+        waveMesh.position.set(0, -1, waveState.z);
+        waveMesh.rotation.y = Math.PI;
+        waveMaterial.uniforms.time.value = time;
+        waveMesh.visible = waveState.z > -8;
     }
-    
-    // Position wave mesh
-    waveMesh.position.set(0, -3, waveState.z);
-    waveMaterial.uniforms.time.value = time;
-    waveMaterial.uniforms.opacity.value = waveState.z > -5 ? 0.9 : 0.9 * (1 + waveState.z / 5);
     
     // Update droplets
     updateDroplets(dt);
@@ -584,8 +754,13 @@ function animate() {
         dropletSystem.material.uniforms.time.value = time;
     }
     
-    // Update environment map
-    cubeCamera.update(renderer, scene);
+    // Update environment map occasionally (not every frame - causes feedback loop)
+    // Hide droplets during env map capture to avoid feedback
+    if (Math.floor(time) % 2 === 0 && Math.floor(time * 10) % 10 === 0) {
+        if (dropletSystem) dropletSystem.points.visible = false;
+        cubeCamera.update(renderer, scene);
+        if (dropletSystem) dropletSystem.points.visible = true;
+    }
     
     renderer.render(scene, camera);
 }
@@ -601,4 +776,4 @@ window.addEventListener('resize', () => {
 createText();
 animate();
 
-console.log('Particle Water Effect: Droplets fall from wave, stick to invisible text, slide down, drip off');
+console.log(`3D Wave Effect: ${MAX_DROPLETS} droplets (multiplier: ${DROPLET_MULTIPLIER}x). Droplets stick to invisible text, slide down, drip off.`);
