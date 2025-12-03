@@ -1,0 +1,20 @@
+{
+  "name": "3d-waves",
+  "version": "1.0.0",
+  "description": "Innovative 3D wave effect for web",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite -c vite.config.ts",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "keywords": ["3d", "waves", "effect", "web"],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "vite": "^5.0.0"
+  },
+  "dependencies": {
+    "three": "^0.159.0"
+  }
+}
