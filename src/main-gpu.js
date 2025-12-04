@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { FontLoader } from 'three/examples/jsm/loaders/FontLoader.js';
 import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js';
-import { ParticleSystem, generateSDF } from './gpu-particles.js';
+import { ParticleSystem, generateSDFAsync, generateSDF } from './gpu-particles.js';
 import * as CONFIG from './config.js';
 
 // ============================================
@@ -50,20 +50,41 @@ let particles = null;
 let particlesMesh = null;
 let textBBox = null;
 
-function initParticleSystem(textGeometry) {
-    console.log('Generating SDF...');
-    const sdfData = generateSDF(textGeometry, CONFIG.SDF_RESOLUTION);
+async function initParticleSystem(textGeometry) {
+    console.log('Generating SDF (async)...');
     
-    textBBox = sdfData.bbox;
+    // Update loader text to show progress
+    const loaderText = document.querySelector('.loader-text');
     
-    // Create optimized particle system
-    particles = new ParticleSystem(CONFIG.MAX_PARTICLES);
-    particles.setSDF(sdfData);
-    
-    // Create Three.js mesh for rendering
-    createParticleRenderer();
-    
-    console.log('Particle System ready:', CONFIG.MAX_PARTICLES.toLocaleString(), 'max particles');
+    try {
+        // Use async Web Worker for SDF generation (non-blocking)
+        const sdfData = await generateSDFAsync(
+            textGeometry, 
+            CONFIG.SDF_RESOLUTION,
+            (progress) => {
+                if (loaderText) loaderText.textContent = `Generating collision map... ${progress}%`;
+            }
+        );
+        
+        textBBox = sdfData.bbox;
+        
+        // Create optimized particle system
+        particles = new ParticleSystem(CONFIG.MAX_PARTICLES);
+        particles.setSDF(sdfData);
+        
+        // Create Three.js mesh for rendering
+        createParticleRenderer();
+        
+        console.log('Particle System ready:', CONFIG.MAX_PARTICLES.toLocaleString(), 'max particles');
+    } catch (err) {
+        console.warn('Async SDF failed, falling back to sync:', err);
+        // Fallback to synchronous generation
+        const sdfData = generateSDF(textGeometry, CONFIG.SDF_RESOLUTION);
+        textBBox = sdfData.bbox;
+        particles = new ParticleSystem(CONFIG.MAX_PARTICLES);
+        particles.setSDF(sdfData);
+        createParticleRenderer();
+    }
 }
 
 function createParticleRenderer() {
@@ -182,15 +203,18 @@ function createParticleRenderer() {
     scene.add(particlesMesh);
 }
 
-// Update Three.js buffers from particle system
+// Update Three.js buffers from particle system - optimized draw range
 function syncParticleBuffers() {
     if (!particles || !particlesMesh) return;
     
     const posAttr = particlesMesh.geometry.attributes.position;
     const stateAttr = particlesMesh.geometry.attributes.state;
     
-    particles.copyToBuffers(posAttr, stateAttr);
-    particlesMesh.geometry.setDrawRange(0, particles.count);
+    // copyToBuffers now returns actual count of particles copied (only active range)
+    const activeCount = particles.copyToBuffers(posAttr, stateAttr);
+    
+    // Only tell GPU to draw particles that exist - significant optimization
+    particlesMesh.geometry.setDrawRange(0, activeCount);
 }
 
 // ============================================
@@ -363,34 +387,328 @@ const waveMesh = new THREE.Mesh(createWaveGeometry(), waveMaterial);
 scene.add(waveMesh);
 
 // ============================================
+// TEXT SETTINGS
+// ============================================
+let textSettings = {
+    text: 'WEEKEND',
+    fontName: 'helvetiker',
+    fontWeight: 'bold',
+    size: 2.8,
+    height: 0.6,
+    letterSpacing: 0,
+    bevelEnabled: true,
+    bevelSize: 0.04,
+    underline: false
+};
+
+let loadedFonts = {};
+let underlineMesh = null;
+
+// Font URLs from Three.js examples
+const FONT_URLS = {
+    helvetiker_bold: 'https://threejs.org/examples/fonts/helvetiker_bold.typeface.json',
+    helvetiker_regular: 'https://threejs.org/examples/fonts/helvetiker_regular.typeface.json',
+    optimer_bold: 'https://threejs.org/examples/fonts/optimer_bold.typeface.json',
+    optimer_regular: 'https://threejs.org/examples/fonts/optimer_regular.typeface.json',
+    gentilis_bold: 'https://threejs.org/examples/fonts/gentilis_bold.typeface.json',
+    gentilis_regular: 'https://threejs.org/examples/fonts/gentilis_regular.typeface.json',
+    droid_sans_bold: 'https://threejs.org/examples/fonts/droid/droid_sans_bold.typeface.json',
+    droid_sans_regular: 'https://threejs.org/examples/fonts/droid/droid_sans_regular.typeface.json',
+    droid_serif_bold: 'https://threejs.org/examples/fonts/droid/droid_serif_bold.typeface.json',
+    droid_serif_regular: 'https://threejs.org/examples/fonts/droid/droid_serif_regular.typeface.json'
+};
+
+// ============================================
 // TEXT CREATION
 // ============================================
-function createText() {
-    const loader = new FontLoader();
-    loader.load('https://threejs.org/examples/fonts/helvetiker_bold.typeface.json', (font) => {
-        const geometry = new TextGeometry('WEEKEND', {
+function getFontKey(fontName, weight) {
+    return `${fontName}_${weight}`;
+}
+
+function loadFont(fontKey) {
+    return new Promise((resolve, reject) => {
+        if (loadedFonts[fontKey]) {
+            resolve(loadedFonts[fontKey]);
+            return;
+        }
+        
+        const url = FONT_URLS[fontKey];
+        if (!url) {
+            reject(new Error(`Font not found: ${fontKey}`));
+            return;
+        }
+        
+        const loader = new FontLoader();
+        loader.load(url, (font) => {
+            loadedFonts[fontKey] = font;
+            resolve(font);
+        }, undefined, reject);
+    });
+}
+
+function createTextWithLetterSpacing(font, text, settings) {
+    if (settings.letterSpacing === 0) {
+        // No letter spacing - use standard TextGeometry
+        return new TextGeometry(text, {
             font: font,
-            size: 2.8,
-            height: 0.6,
-            curveSegments: 12,
-            bevelEnabled: true,
-            bevelThickness: 0.05,
-            bevelSize: 0.03,
-            bevelSegments: 4
+            size: settings.size,
+            height: settings.height,
+            curveSegments: 24,
+            bevelEnabled: settings.bevelEnabled,
+            bevelThickness: 0.06,
+            bevelSize: settings.bevelSize,
+            bevelSegments: 6
         });
+    }
+    
+    // Letter spacing: create each character separately and merge
+    const geometries = [];
+    let offsetX = 0;
+    
+    for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+        if (char === ' ') {
+            offsetX += settings.size * 0.5 + settings.letterSpacing;
+            continue;
+        }
+        
+        const charGeom = new TextGeometry(char, {
+            font: font,
+            size: settings.size,
+            height: settings.height,
+            curveSegments: 24,
+            bevelEnabled: settings.bevelEnabled,
+            bevelThickness: 0.06,
+            bevelSize: settings.bevelSize,
+            bevelSegments: 6
+        });
+        
+        charGeom.computeBoundingBox();
+        const charWidth = charGeom.boundingBox.max.x - charGeom.boundingBox.min.x;
+        
+        // Translate character to position
+        charGeom.translate(offsetX - charGeom.boundingBox.min.x, 0, 0);
+        geometries.push(charGeom);
+        
+        offsetX += charWidth + settings.letterSpacing;
+    }
+    
+    // Merge all character geometries
+    if (geometries.length === 0) return null;
+    if (geometries.length === 1) return geometries[0];
+    
+    // Use BufferGeometryUtils to merge
+    const mergedGeometry = mergeBufferGeometries(geometries);
+    return mergedGeometry;
+}
+
+// Simple geometry merge function
+function mergeBufferGeometries(geometries) {
+    let totalPositions = 0;
+    let totalNormals = 0;
+    let totalIndices = 0;
+    
+    geometries.forEach(g => {
+        g.computeVertexNormals();
+        totalPositions += g.attributes.position.count;
+        if (g.index) totalIndices += g.index.count;
+    });
+    
+    const positions = new Float32Array(totalPositions * 3);
+    const normals = new Float32Array(totalPositions * 3);
+    const indices = [];
+    
+    let posOffset = 0;
+    let idxOffset = 0;
+    
+    geometries.forEach(g => {
+        const pos = g.attributes.position.array;
+        const norm = g.attributes.normal.array;
+        
+        positions.set(pos, posOffset * 3);
+        normals.set(norm, posOffset * 3);
+        
+        if (g.index) {
+            const idx = g.index.array;
+            for (let i = 0; i < idx.length; i++) {
+                indices.push(idx[i] + posOffset);
+            }
+        }
+        
+        posOffset += g.attributes.position.count;
+    });
+    
+    const merged = new THREE.BufferGeometry();
+    merged.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    merged.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+    if (indices.length > 0) {
+        merged.setIndex(indices);
+    }
+    
+    return merged;
+}
+
+function createUnderline(bbox, settings) {
+    const width = bbox.max.x - bbox.min.x;
+    const underlineGeom = new THREE.BoxGeometry(
+        width + 0.5,
+        settings.size * 0.08,
+        settings.height
+    );
+    
+    const underlineMat = new THREE.MeshStandardMaterial({
+        color: 0x88ccff,
+        metalness: 0.3,
+        roughness: 0.5,
+        transparent: true,
+        opacity: 0.8
+    });
+    
+    const mesh = new THREE.Mesh(underlineGeom, underlineMat);
+    mesh.position.set(
+        (bbox.max.x + bbox.min.x) / 2,
+        bbox.min.y - settings.size * 0.15,
+        (bbox.max.z + bbox.min.z) / 2
+    );
+    
+    return mesh;
+}
+
+async function createText(isUpdate = false) {
+    const fontKey = getFontKey(textSettings.fontName, textSettings.fontWeight);
+    
+    try {
+        const font = await loadFont(fontKey);
+        
+        let geometry = createTextWithLetterSpacing(font, textSettings.text, textSettings);
+        if (!geometry) {
+            console.error('Failed to create text geometry');
+            return;
+        }
         
         geometry.center();
         geometry.computeBoundingBox();
         geometry.computeVertexNormals();
         
-        console.log('Text geometry ready');
-        initParticleSystem(geometry);
+        console.log('Text geometry ready:', textSettings.text);
+        
+        // Remove old underline if exists
+        if (underlineMesh) {
+            scene.remove(underlineMesh);
+            underlineMesh.geometry.dispose();
+            underlineMesh.material.dispose();
+            underlineMesh = null;
+        }
+        
+        // Add underline if enabled
+        if (textSettings.underline) {
+            underlineMesh = createUnderline(geometry.boundingBox, textSettings);
+            scene.add(underlineMesh);
+        }
+        
+        // Reset particles if updating
+        if (isUpdate && particles) {
+            particles.reset();
+        }
+        
+        // Await async SDF generation (runs in Web Worker)
+        await initParticleSystem(geometry);
         
         // Hide loader after everything is ready
-        const loader = document.getElementById('loader');
-        if (loader) {
-            loader.classList.add('hidden');
-            setTimeout(() => loader.remove(), 500);
+        const loaderEl = document.getElementById('loader');
+        if (loaderEl) {
+            loaderEl.classList.add('hidden');
+            setTimeout(() => loaderEl.remove(), 500);
+        }
+    } catch (error) {
+        console.error('Failed to load font:', error);
+        // Hide loader even on error
+        const loaderEl = document.getElementById('loader');
+        if (loaderEl) {
+            loaderEl.classList.add('hidden');
+            setTimeout(() => loaderEl.remove(), 500);
+        }
+    }
+}
+
+// ============================================
+// CONTROL PANEL SETUP
+// ============================================
+function setupControls() {
+    // Text input
+    const textInput = document.getElementById('text-input');
+    
+    // Font buttons
+    const fontBtns = document.querySelectorAll('.font-btn:not(.weight-btn)');
+    fontBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            fontBtns.forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            textSettings.fontName = btn.dataset.font;
+        });
+    });
+    
+    // Weight buttons
+    const weightBtns = document.querySelectorAll('.weight-btn');
+    weightBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            weightBtns.forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            textSettings.fontWeight = btn.dataset.weight;
+        });
+    });
+    
+    // Sliders
+    const sliders = [
+        { id: 'size-slider', valueId: 'size-value', prop: 'size' },
+        { id: 'spacing-slider', valueId: 'spacing-value', prop: 'letterSpacing' },
+        { id: 'depth-slider', valueId: 'depth-value', prop: 'height' },
+        { id: 'bevel-slider', valueId: 'bevel-value', prop: 'bevelSize' }
+    ];
+    
+    sliders.forEach(({ id, valueId, prop }) => {
+        const slider = document.getElementById(id);
+        const valueDisplay = document.getElementById(valueId);
+        
+        slider.addEventListener('input', () => {
+            const val = parseFloat(slider.value);
+            valueDisplay.textContent = val.toFixed(prop === 'letterSpacing' ? 2 : 1);
+            textSettings[prop] = val;
+        });
+    });
+    
+    // Checkboxes
+    document.getElementById('bevel-enabled').addEventListener('change', (e) => {
+        textSettings.bevelEnabled = e.target.checked;
+    });
+    
+    document.getElementById('underline-enabled').addEventListener('change', (e) => {
+        textSettings.underline = e.target.checked;
+    });
+    
+    // Apply button
+    document.getElementById('apply-btn').addEventListener('click', () => {
+        textSettings.text = textInput.value.toUpperCase() || 'TEXT';
+        createText(true);
+    });
+    
+    // Toggle controls visibility
+    const controls = document.getElementById('controls');
+    const toggleBtn = document.getElementById('toggle-controls');
+    const closeBtn = document.getElementById('close-controls');
+    
+    toggleBtn.addEventListener('click', () => {
+        controls.classList.remove('hidden');
+    });
+    
+    closeBtn.addEventListener('click', () => {
+        controls.classList.add('hidden');
+    });
+    
+    // Close controls with Escape
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            controls.classList.add('hidden');
         }
     });
 }
@@ -474,6 +792,7 @@ window.addEventListener('resize', () => {
     renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
+setupControls();
 createText();
 animate();
 

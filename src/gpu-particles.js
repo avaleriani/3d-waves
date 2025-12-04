@@ -14,24 +14,10 @@ const DRIPPING = 3;  // Falling off letter
 const INACTIVE = 4;  // Dead/unused
 const BOUNCING = 5;  // Bounced off on impact
 
-// Generate 3D Signed Distance Field from geometry
-export function generateSDF(geometry, resolution = 64) {
-    console.time('SDF Generation');
-    
-    const bbox = geometry.boundingBox.clone();
-    bbox.expandByScalar(0.8);
-    
-    const size = {
-        x: bbox.max.x - bbox.min.x,
-        y: bbox.max.y - bbox.min.y,
-        z: bbox.max.z - bbox.min.z
-    };
-    
-    const data = new Float32Array(resolution * resolution * resolution);
+// Extract triangle data from geometry (runs on main thread)
+export function extractTriangles(geometry) {
     const positions = geometry.attributes.position.array;
     const indices = geometry.index ? geometry.index.array : null;
-    
-    // Build proper triangle data for accurate distance
     const triCount = indices ? indices.length / 3 : positions.length / 9;
     const triangles = [];
     
@@ -47,11 +33,76 @@ export function generateSDF(geometry, resolution = 64) {
         });
     }
     
+    return triangles;
+}
+
+// Generate SDF using Web Worker (non-blocking)
+export function generateSDFAsync(geometry, resolution = 64, onProgress) {
+    return new Promise((resolve, reject) => {
+        const bbox = geometry.boundingBox.clone();
+        bbox.expandByScalar(0.8);
+        
+        const triangles = extractTriangles(geometry);
+        
+        // Create worker
+        const worker = new Worker(new URL('./sdf-worker.js', import.meta.url), { type: 'module' });
+        
+        worker.onmessage = (e) => {
+            if (e.data.type === 'progress') {
+                if (onProgress) onProgress(e.data.progress);
+            } else if (e.data.type === 'complete') {
+                console.log(`SDF Generation: ${e.data.duration.toFixed(0)}ms (worker)`);
+                
+                resolve({
+                    data: e.data.data,
+                    bbox,
+                    size: e.data.size,
+                    resolution,
+                    stepX: e.data.stepX,
+                    stepY: e.data.stepY,
+                    stepZ: e.data.stepZ
+                });
+                
+                worker.terminate();
+            }
+        };
+        
+        worker.onerror = (err) => {
+            console.error('SDF Worker error:', err);
+            reject(err);
+            worker.terminate();
+        };
+        
+        // Send data to worker
+        worker.postMessage({
+            triangles,
+            bbox: { min: { x: bbox.min.x, y: bbox.min.y, z: bbox.min.z },
+                    max: { x: bbox.max.x, y: bbox.max.y, z: bbox.max.z } },
+            resolution
+        });
+    });
+}
+
+// Synchronous fallback (for when workers aren't available)
+export function generateSDF(geometry, resolution = 64) {
+    console.time('SDF Generation');
+    
+    const bbox = geometry.boundingBox.clone();
+    bbox.expandByScalar(0.8);
+    
+    const size = {
+        x: bbox.max.x - bbox.min.x,
+        y: bbox.max.y - bbox.min.y,
+        z: bbox.max.z - bbox.min.z
+    };
+    
+    const triangles = extractTriangles(geometry);
+    const data = new Float32Array(resolution * resolution * resolution);
+    
     const stepX = size.x / resolution;
     const stepY = size.y / resolution;
     const stepZ = size.z / resolution;
     
-    // Fill SDF with accurate distances to triangles
     for (let z = 0; z < resolution; z++) {
         const pz = bbox.min.z + (z + 0.5) * stepZ;
         for (let y = 0; y < resolution; y++) {
@@ -71,7 +122,6 @@ export function generateSDF(geometry, resolution = 64) {
     }
     
     console.timeEnd('SDF Generation');
-    console.log('SDF bounds:', bbox.min, bbox.max);
     
     return { data, bbox, size, resolution, stepX, stepY, stepZ };
 }
@@ -184,25 +234,56 @@ export class ParticleSystem {
         this.sdf = sdfData;
     }
     
-    // Sample SDF at position - O(1) collision!
+    // Sample SDF at position with trilinear interpolation - smooth O(1) collision!
     sampleSDF(x, y, z) {
         if (!this.sdf) return 100;
         
         const { data, bbox, resolution, stepX, stepY, stepZ } = this.sdf;
         
-        // Convert world pos to grid coords
-        const gx = Math.floor((x - bbox.min.x) / stepX);
-        const gy = Math.floor((y - bbox.min.y) / stepY);
-        const gz = Math.floor((z - bbox.min.z) / stepZ);
+        // Convert world pos to continuous grid coords
+        const fx = (x - bbox.min.x) / stepX - 0.5;
+        const fy = (y - bbox.min.y) / stepY - 0.5;
+        const fz = (z - bbox.min.z) / stepZ - 0.5;
         
-        // Bounds check
-        if (gx < 0 || gx >= resolution || 
-            gy < 0 || gy >= resolution || 
-            gz < 0 || gz >= resolution) {
+        // Integer grid coords
+        const x0 = Math.floor(fx);
+        const y0 = Math.floor(fy);
+        const z0 = Math.floor(fz);
+        
+        // Bounds check (with 1 cell margin for interpolation)
+        if (x0 < 0 || x0 >= resolution - 1 || 
+            y0 < 0 || y0 >= resolution - 1 || 
+            z0 < 0 || z0 >= resolution - 1) {
             return 100; // Far from surface
         }
         
-        return data[gx + gy * resolution + gz * resolution * resolution];
+        // Fractional parts for interpolation
+        const tx = fx - x0;
+        const ty = fy - y0;
+        const tz = fz - z0;
+        
+        // Sample 8 corners of the cell
+        const r = resolution;
+        const r2 = r * r;
+        const i000 = x0 + y0 * r + z0 * r2;
+        const i100 = i000 + 1;
+        const i010 = i000 + r;
+        const i110 = i000 + r + 1;
+        const i001 = i000 + r2;
+        const i101 = i000 + r2 + 1;
+        const i011 = i000 + r2 + r;
+        const i111 = i000 + r2 + r + 1;
+        
+        // Trilinear interpolation
+        const c00 = data[i000] * (1 - tx) + data[i100] * tx;
+        const c10 = data[i010] * (1 - tx) + data[i110] * tx;
+        const c01 = data[i001] * (1 - tx) + data[i101] * tx;
+        const c11 = data[i011] * (1 - tx) + data[i111] * tx;
+        
+        const c0 = c00 * (1 - ty) + c10 * ty;
+        const c1 = c01 * (1 - ty) + c11 * ty;
+        
+        return c0 * (1 - tz) + c1 * tz;
     }
     
     // Compute SDF gradient (surface normal direction)
@@ -244,12 +325,15 @@ export class ParticleSystem {
         const normal = { x: 0, y: 0, z: 0 };
         
         let activeCount = 0;
+        let highestActive = 0;
         
+        // Process particles, tracking highest active index for draw range optimization
         for (let i = 0; i < this.count; i++) {
             const s = this.state[i];
             if (s === INACTIVE) continue;
             
             activeCount++;
+            highestActive = i;
             
             // ========== FALLING STATE ==========
             // Invisible drops flying toward text
@@ -417,32 +501,43 @@ export class ParticleSystem {
             }
         }
         
+        // Store highest active index for optimized rendering
+        this.highestActiveIndex = highestActive;
         return activeCount;
     }
     
-    // Copy to Three.js buffer attributes
+    // Copy to Three.js buffer attributes - optimized to only copy active range
     copyToBuffers(positionAttr, stateAttr) {
         const pos = positionAttr.array;
         const st = stateAttr.array;
         
-        for (let i = 0; i < this.count; i++) {
-            pos[i * 3] = this.posX[i];
-            pos[i * 3 + 1] = this.posY[i];
-            pos[i * 3 + 2] = this.posZ[i];
+        // Only copy up to highest active particle (not all allocated)
+        const limit = Math.min(this.highestActiveIndex + 1, this.count);
+        
+        for (let i = 0; i < limit; i++) {
+            const i3 = i * 3;
+            const i4 = i * 4;
             
-            st[i * 4] = this.state[i];
-            st[i * 4 + 1] = this.stickTime[i];
-            st[i * 4 + 2] = this.size[i];
-            st[i * 4 + 3] = this.slideSpeed[i];
+            pos[i3] = this.posX[i];
+            pos[i3 + 1] = this.posY[i];
+            pos[i3 + 2] = this.posZ[i];
+            
+            st[i4] = this.state[i];
+            st[i4 + 1] = this.stickTime[i];
+            st[i4 + 2] = this.size[i];
+            st[i4 + 3] = this.slideSpeed[i];
         }
         
         positionAttr.needsUpdate = true;
         stateAttr.needsUpdate = true;
+        
+        return limit; // Return count for draw range
     }
     
     // Reset for next wave
     reset() {
         this.count = 0;
+        this.highestActiveIndex = 0;
         this.state.fill(INACTIVE);
     }
     
