@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { FontLoader } from 'three/examples/jsm/loaders/FontLoader.js';
 import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js';
 import { ParticleSystem, generateSDFAsync, generateSDF } from './gpu-particles.js';
+import { HybridParticleSystem, BACKEND } from './particle-system.js';
 import * as CONFIG from './config.js';
 
 // ============================================
@@ -53,11 +54,13 @@ let textBBox = null;
 async function initParticleSystem(textGeometry) {
     console.log('Generating SDF (async)...');
     
-    // Update loader text to show progress
     const loaderText = document.querySelector('.loader-text');
+    const backendTypeEl = document.getElementById('backend-type');
     
     try {
-        // Use async Web Worker for SDF generation (non-blocking)
+        // Generate SDF in Web Worker
+        if (loaderText) loaderText.textContent = 'Generating collision map...';
+        
         const sdfData = await generateSDFAsync(
             textGeometry, 
             CONFIG.SDF_RESOLUTION,
@@ -68,22 +71,42 @@ async function initParticleSystem(textGeometry) {
         
         textBBox = sdfData.bbox;
         
-        // Create optimized particle system
-        particles = new ParticleSystem(CONFIG.MAX_PARTICLES);
-        particles.setSDF(sdfData);
+        // Initialize hybrid particle system (auto-selects best backend)
+        if (loaderText) loaderText.textContent = 'Initializing particle system...';
+        
+        particles = new HybridParticleSystem(CONFIG.MAX_PARTICLES);
+        await particles.init(sdfData);
+        
+        // Update backend display
+        const backendNames = {
+            [BACKEND.WEBGPU]: '🚀 WebGPU Compute',
+            [BACKEND.WORKERS]: '⚡ Multi-threaded Workers',
+            [BACKEND.SINGLE_THREAD]: '💻 Single-threaded CPU'
+        };
+        if (backendTypeEl) {
+            backendTypeEl.textContent = backendNames[particles.getBackendType()] || 'Unknown';
+            backendTypeEl.style.color = particles.getBackendType() === BACKEND.WEBGPU ? '#00ff88' : 
+                                         particles.getBackendType() === BACKEND.WORKERS ? '#88ccff' : '#ffcc88';
+        }
         
         // Create Three.js mesh for rendering
         createParticleRenderer();
         
         console.log('Particle System ready:', CONFIG.MAX_PARTICLES.toLocaleString(), 'max particles');
+        console.log('Backend:', particles.getBackendType());
+        
     } catch (err) {
         console.warn('Async SDF failed, falling back to sync:', err);
-        // Fallback to synchronous generation
         const sdfData = generateSDF(textGeometry, CONFIG.SDF_RESOLUTION);
         textBBox = sdfData.bbox;
         particles = new ParticleSystem(CONFIG.MAX_PARTICLES);
         particles.setSDF(sdfData);
         createParticleRenderer();
+        
+        if (backendTypeEl) {
+            backendTypeEl.textContent = '💻 Single-threaded CPU (fallback)';
+            backendTypeEl.style.color = '#ffcc88';
+        }
     }
 }
 
@@ -692,6 +715,47 @@ function setupControls() {
         createText(true);
     });
     
+    // Reset button - restore defaults
+    document.getElementById('reset-btn').addEventListener('click', () => {
+        // Reset to defaults
+        textSettings.text = 'WEEKEND';
+        textSettings.fontName = 'helvetiker';
+        textSettings.fontWeight = 'bold';
+        textSettings.size = 2.8;
+        textSettings.height = 0.6;
+        textSettings.letterSpacing = 0;
+        textSettings.bevelEnabled = true;
+        textSettings.bevelSize = 0.04;
+        textSettings.underline = false;
+        
+        // Update UI
+        textInput.value = 'WEEKEND';
+        
+        // Reset font buttons
+        fontBtns.forEach(b => b.classList.remove('active'));
+        document.querySelector('[data-font="helvetiker"]').classList.add('active');
+        
+        weightBtns.forEach(b => b.classList.remove('active'));
+        document.querySelector('[data-weight="bold"]').classList.add('active');
+        
+        // Reset sliders
+        document.getElementById('size-slider').value = 2.8;
+        document.getElementById('size-value').textContent = '2.8';
+        document.getElementById('spacing-slider').value = 0;
+        document.getElementById('spacing-value').textContent = '0.00';
+        document.getElementById('depth-slider').value = 0.6;
+        document.getElementById('depth-value').textContent = '0.6';
+        document.getElementById('bevel-slider').value = 0.04;
+        document.getElementById('bevel-value').textContent = '0.0';
+        
+        // Reset checkboxes
+        document.getElementById('bevel-enabled').checked = true;
+        document.getElementById('underline-enabled').checked = false;
+        
+        // Regenerate text
+        createText(true);
+    });
+    
     // Toggle controls visibility
     const controls = document.getElementById('controls');
     const toggleBtn = document.getElementById('toggle-controls');
@@ -720,11 +784,12 @@ const video = document.getElementById('video-bg');
 let lastTime = performance.now();
 let wasSpawning = false;
 let fallbackTime = 0;  // Used when no video
+let updateInProgress = false;  // For async WebGPU updates
 
 // Check if video is available
 const hasVideo = video && video.src && video.readyState > 0;
 
-function animate() {
+async function animate() {
     requestAnimationFrame(animate);
     
     const now = performance.now();
@@ -741,7 +806,7 @@ function animate() {
         fallbackTime += dt;
         if (fallbackTime > CONFIG.VIDEO_LOOP_DURATION) {
             fallbackTime = 0;
-            if (particles) particles.reset();
+            if (particles && particles.isReady()) particles.reset();
         }
         videoTime = fallbackTime;
     }
@@ -750,7 +815,7 @@ function animate() {
     const isWaveHitting = videoTime >= CONFIG.VIDEO_WAVE_HIT_TIME && videoTime <= CONFIG.VIDEO_WAVE_END_TIME;
     
     // Spawn particles when video wave is hitting
-    if (isWaveHitting && particles) {
+    if (isWaveHitting && particles && particles.isReady()) {
         // Calculate spawn Z based on progress through wave
         const progress = (videoTime - CONFIG.VIDEO_WAVE_HIT_TIME) / (CONFIG.VIDEO_WAVE_END_TIME - CONFIG.VIDEO_WAVE_HIT_TIME);
         const spawnZ = 15 - progress * 15;  // From Z=15 to Z=0
@@ -760,7 +825,7 @@ function animate() {
     // Reset particles when video loops (detect transition from end to start)
     if (wasSpawning && !isWaveHitting && videoTime < CONFIG.VIDEO_WAVE_HIT_TIME) {
         // Video looped or wave passed - let particles drain naturally
-        if (particles && particles.countOnText() < 100) {
+        if (particles && particles.isReady() && particles.countOnText() < 100) {
             particles.reset();
         }
     }
@@ -769,10 +834,17 @@ function animate() {
     // Hide wave mesh - we're using video now
     waveMesh.visible = false;
     
-    // Particle physics (SoA + SDF collision)
-    if (particles) {
-        particles.update(dt, time);
-        syncParticleBuffers();
+    // Particle physics (handles async WebGPU or sync CPU)
+    if (particles && particles.isReady() && !updateInProgress) {
+        updateInProgress = true;
+        try {
+            // Update returns a promise for WebGPU, resolves immediately for CPU
+            await particles.update(dt, time);
+            syncParticleBuffers();
+        } catch (err) {
+            console.error('Particle update error:', err);
+        }
+        updateInProgress = false;
     }
     
     // Update particle shader

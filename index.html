@@ -388,7 +388,14 @@
             </div>
         </div>
         
-        <button id="apply-btn">Apply Changes</button>
+        <div style="display:flex;gap:8px;margin-top:10px;">
+            <button id="apply-btn" style="flex:1;">Apply Changes</button>
+            <button id="reset-btn" style="flex:0 0 auto;padding:12px 16px;background:rgba(255,100,100,0.2);border:1px solid rgba(255,100,100,0.4);border-radius:6px;color:#ff9999;font-size:12px;cursor:pointer;">Reset</button>
+        </div>
+        
+        <div id="backend-info" style="margin-top:12px;padding:8px;background:rgba(0,255,100,0.1);border:1px solid rgba(0,255,100,0.2);border-radius:6px;font-size:11px;color:rgba(255,255,255,0.6);text-align:center;">
+            Backend: <span id="backend-type">Initializing...</span>
+        </div>
     </div>
     <button id="toggle-controls">&#9881;</button>
     

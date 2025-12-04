@@ -44,8 +44,8 @@ export function generateSDFAsync(geometry, resolution = 64, onProgress) {
         
         const triangles = extractTriangles(geometry);
         
-        // Create worker
-        const worker = new Worker(new URL('./sdf-worker.js', import.meta.url), { type: 'module' });
+        // Create worker (classic worker, not module)
+        const worker = new Worker(new URL('./sdf-worker.js', import.meta.url));
         
         worker.onmessage = (e) => {
             if (e.data.type === 'progress') {
