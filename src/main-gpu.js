@@ -2,20 +2,7 @@ import * as THREE from 'three';
 import { FontLoader } from 'three/examples/jsm/loaders/FontLoader.js';
 import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js';
 import { ParticleSystem, generateSDF } from './gpu-particles.js';
-
-// ============================================
-// CONFIGURATION
-// ============================================
-const MAX_PARTICLES = 200000;  // 200K particles for MASSIVE splash
-const SPAWN_RATE = 5000;       // HUGE splash - like a bucket thrown at the letters!
-const SDF_RESOLUTION = 64;     // Higher resolution = better letter shapes
-
-// ============================================
-// VIDEO SYNC CONFIG - Adjust these to match your wave video!
-// ============================================
-const VIDEO_WAVE_HIT_TIME = 2.0;    // Seconds into video when wave hits (start spawning)
-const VIDEO_WAVE_END_TIME = 2.8;    // SHORT burst - like a bucket splash!
-const VIDEO_LOOP_DURATION = 10.0;   // Total video loop duration
+import * as CONFIG from './config.js';
 
 // ============================================
 // SCENE SETUP
@@ -65,18 +52,18 @@ let textBBox = null;
 
 function initParticleSystem(textGeometry) {
     console.log('Generating SDF...');
-    const sdfData = generateSDF(textGeometry, SDF_RESOLUTION);
+    const sdfData = generateSDF(textGeometry, CONFIG.SDF_RESOLUTION);
     
     textBBox = sdfData.bbox;
     
     // Create optimized particle system
-    particles = new ParticleSystem(MAX_PARTICLES);
+    particles = new ParticleSystem(CONFIG.MAX_PARTICLES);
     particles.setSDF(sdfData);
     
     // Create Three.js mesh for rendering
     createParticleRenderer();
     
-    console.log('Particle System ready:', MAX_PARTICLES.toLocaleString(), 'max particles');
+    console.log('Particle System ready:', CONFIG.MAX_PARTICLES.toLocaleString(), 'max particles');
 }
 
 function createParticleRenderer() {
@@ -184,8 +171,8 @@ function createParticleRenderer() {
     const geometry = new THREE.BufferGeometry();
     
     // Dummy attributes - will be replaced with GPU buffers
-    const positions = new Float32Array(MAX_PARTICLES * 3);
-    const states = new Float32Array(MAX_PARTICLES * 4);
+    const positions = new Float32Array(CONFIG.MAX_PARTICLES * 3);
+    const states = new Float32Array(CONFIG.MAX_PARTICLES * 4);
     
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geometry.setAttribute('state', new THREE.BufferAttribute(states, 4));
@@ -212,33 +199,36 @@ function syncParticleBuffers() {
 function spawnFromWave(waveZ) {
     if (!particles || !textBBox) return;
     
-    const count = SPAWN_RATE;
+    const count = CONFIG.SPAWN_RATE;
     const positions = new Float32Array(count * 3);
     const velocities = new Float32Array(count * 3);
     const sizes = new Float32Array(count);
     const slideSpeeds = new Float32Array(count);
     
-    // Text dimensions - spawn tightly around the text bounds
+    // Text dimensions
     const width = textBBox.max.x - textBBox.min.x;
     const height = textBBox.max.y - textBBox.min.y;
     const centerX = (textBBox.max.x + textBBox.min.x) / 2;
     const centerY = (textBBox.max.y + textBBox.min.y) / 2;
     
     for (let i = 0; i < count; i++) {
-        // Spawn position - wide spread like water exploding on impact
+        // Spawn position - spread across text area
         positions[i * 3] = centerX + (Math.random() - 0.5) * width * 1.5;
         positions[i * 3 + 1] = centerY + (Math.random() - 0.5) * height * 1.5;
         positions[i * 3 + 2] = 6 + Math.random() * 5;
         
-        // Velocity: CHAOTIC splash - water flying everywhere!
+        // Velocity: chaotic splash with configurable spread
         const angle = Math.random() * Math.PI * 2;
-        const spread = Math.random() * 4;
+        const spread = Math.random() * CONFIG.SPLASH_SPREAD_XY;
         velocities[i * 3] = Math.cos(angle) * spread + (Math.random() - 0.5) * 3;
         velocities[i * 3 + 1] = Math.sin(angle) * spread + (Math.random() - 0.5) * 5;
-        velocities[i * 3 + 2] = -30 - Math.random() * 15;  // FAST toward text
+        velocities[i * 3 + 2] = CONFIG.SPLASH_VELOCITY_Z - Math.random() * CONFIG.SPLASH_VELOCITY_SPREAD;
         
-        sizes[i] = 0.06 + Math.random() * 0.1;  // Varied sizes
-        slideSpeeds[i] = 1.0 + Math.random() * 0.5;
+        // Random drop sizes
+        sizes[i] = CONFIG.DROP_SIZE_MIN + Math.random() * (CONFIG.DROP_SIZE_MAX - CONFIG.DROP_SIZE_MIN);
+        
+        // Random slide speed (0-1 range, used to stagger drip timing)
+        slideSpeeds[i] = Math.random();
     }
     
     particles.spawn(positions, velocities, sizes, slideSpeeds);
@@ -431,7 +421,7 @@ function animate() {
     } else {
         // Fallback: simulate video timing
         fallbackTime += dt;
-        if (fallbackTime > VIDEO_LOOP_DURATION) {
+        if (fallbackTime > CONFIG.VIDEO_LOOP_DURATION) {
             fallbackTime = 0;
             if (particles) particles.reset();
         }
@@ -439,18 +429,18 @@ function animate() {
     }
     
     // Check if we're in the wave hit window
-    const isWaveHitting = videoTime >= VIDEO_WAVE_HIT_TIME && videoTime <= VIDEO_WAVE_END_TIME;
+    const isWaveHitting = videoTime >= CONFIG.VIDEO_WAVE_HIT_TIME && videoTime <= CONFIG.VIDEO_WAVE_END_TIME;
     
     // Spawn particles when video wave is hitting
     if (isWaveHitting && particles) {
         // Calculate spawn Z based on progress through wave
-        const progress = (videoTime - VIDEO_WAVE_HIT_TIME) / (VIDEO_WAVE_END_TIME - VIDEO_WAVE_HIT_TIME);
+        const progress = (videoTime - CONFIG.VIDEO_WAVE_HIT_TIME) / (CONFIG.VIDEO_WAVE_END_TIME - CONFIG.VIDEO_WAVE_HIT_TIME);
         const spawnZ = 15 - progress * 15;  // From Z=15 to Z=0
         spawnFromWave(spawnZ);
     }
     
     // Reset particles when video loops (detect transition from end to start)
-    if (wasSpawning && !isWaveHitting && videoTime < VIDEO_WAVE_HIT_TIME) {
+    if (wasSpawning && !isWaveHitting && videoTime < CONFIG.VIDEO_WAVE_HIT_TIME) {
         // Video looped or wave passed - let particles drain naturally
         if (particles && particles.countOnText() < 100) {
             particles.reset();
@@ -487,5 +477,5 @@ window.addEventListener('resize', () => {
 createText();
 animate();
 
-console.log(`Particle System: ${MAX_PARTICLES.toLocaleString()} particles, video-synced`);
-console.log(`Video sync: wave hits at ${VIDEO_WAVE_HIT_TIME}s, ends at ${VIDEO_WAVE_END_TIME}s`);
+console.log(`Particle System: ${CONFIG.MAX_PARTICLES.toLocaleString()} particles, video-synced`);
+console.log(`Video sync: wave hits at ${CONFIG.VIDEO_WAVE_HIT_TIME}s, ends at ${CONFIG.VIDEO_WAVE_END_TIME}s`);

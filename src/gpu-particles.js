@@ -4,13 +4,15 @@
  * SDF provides O(1) collision detection
  */
 
-// States
-const FALLING = 0;
-const STUCK = 1;
-const SLIDING = 2;
-const DRIPPING = 3;
-const INACTIVE = 4;
-const BOUNCING = 5;  // New state for splash rebound!
+import * as CONFIG from './config.js';
+
+// Particle States
+const FALLING = 0;   // Invisible, flying toward text
+const STUCK = 1;     // Stuck on letter surface
+const SLIDING = 2;   // Sliding down letter
+const DRIPPING = 3;  // Falling off letter
+const INACTIVE = 4;  // Dead/unused
+const BOUNCING = 5;  // Bounced off on impact
 
 // Generate 3D Signed Distance Field from geometry
 export function generateSDF(geometry, resolution = 64) {
@@ -238,7 +240,7 @@ export class ParticleSystem {
     
     // Update all particles - tight loop, cache friendly
     update(dt, time) {
-        const gravity = -9.8;  // Natural gravity
+        const gravity = CONFIG.DRIP_GRAVITY;
         const normal = { x: 0, y: 0, z: 0 };
         
         let activeCount = 0;
@@ -249,21 +251,20 @@ export class ParticleSystem {
             
             activeCount++;
             
+            // ========== FALLING STATE ==========
+            // Invisible drops flying toward text
             if (s === FALLING) {
-                // Apply gravity
                 this.velY[i] += gravity * dt;
                 
-                // Move
                 this.posX[i] += this.velX[i] * dt;
                 this.posY[i] += this.velY[i] * dt;
                 this.posZ[i] += this.velZ[i] * dt;
                 
-                // Check collision with SDF
+                // Check collision with text surface
                 const dist = this.sampleSDF(this.posX[i], this.posY[i], this.posZ[i]);
                 
                 if (dist < 0.35) {
-                    // HIT! Calculate impact speed
-                    const speed = Math.sqrt(this.velX[i]**2 + this.velY[i]**2 + this.velZ[i]**2);
+                    // IMPACT! Get surface normal
                     this.sdfGradient(this.posX[i], this.posY[i], this.posZ[i], normal);
                     
                     // Push out of surface
@@ -272,29 +273,24 @@ export class ParticleSystem {
                     this.posY[i] += normal.y * push;
                     this.posZ[i] += normal.z * push;
                     
-                    // SPLASH DECISION: bounce or stick based on impact speed & randomness
-                    const bounceChance = Math.min(0.7, speed / 40);  // Faster = more likely to bounce
-                    
-                    if (Math.random() < bounceChance) {
-                        // BOUNCE! Reflect velocity off surface
+                    // Decide: BOUNCE or STICK?
+                    if (Math.random() < CONFIG.BOUNCE_CHANCE) {
+                        // BOUNCE - reflect off surface with energy loss
                         const dotVN = this.velX[i]*normal.x + this.velY[i]*normal.y + this.velZ[i]*normal.z;
+                        const restitution = CONFIG.BOUNCE_RESTITUTION_MIN + 
+                            Math.random() * (CONFIG.BOUNCE_RESTITUTION_MAX - CONFIG.BOUNCE_RESTITUTION_MIN);
                         
-                        // Reflect with energy loss
-                        const restitution = 0.3 + Math.random() * 0.4;  // 30-70% energy kept
                         this.velX[i] = (this.velX[i] - 2*dotVN*normal.x) * restitution;
                         this.velY[i] = (this.velY[i] - 2*dotVN*normal.y) * restitution;
                         this.velZ[i] = (this.velZ[i] - 2*dotVN*normal.z) * restitution;
                         
-                        // Add random splash scatter
-                        this.velX[i] += (Math.random() - 0.5) * 8;
-                        this.velY[i] += (Math.random() - 0.5) * 8 + 3;  // Upward bias
-                        this.velZ[i] += (Math.random() - 0.5) * 5;
+                        // Add chaotic splash scatter
+                        this.velX[i] += (Math.random() - 0.5) * CONFIG.BOUNCE_SCATTER * 2;
+                        this.velY[i] += (Math.random() - 0.5) * CONFIG.BOUNCE_SCATTER + CONFIG.SPLASH_UPWARD_BIAS;
+                        this.velZ[i] += (Math.random() - 0.5) * CONFIG.BOUNCE_SCATTER;
                         
                         this.state[i] = BOUNCING;
-                        this.stickTime[i] = 0;  // Track bounces
-                        
-                        // Some drops split smaller on impact
-                        this.size[i] *= (0.6 + Math.random() * 0.4);
+                        this.size[i] *= CONFIG.BOUNCE_SIZE_REDUCTION + Math.random() * 0.3;
                     } else {
                         // STICK to surface
                         this.velX[i] = 0;
@@ -305,87 +301,70 @@ export class ParticleSystem {
                     }
                 }
                 
-                // Remove if fallen too far
-                if (this.posY[i] < -20 || this.posZ[i] < -10) {
+                // Remove if missed text entirely
+                if (this.posY[i] < CONFIG.DRIP_REMOVE_Y || this.posZ[i] < -10) {
                     this.state[i] = INACTIVE;
                     this.size[i] = 0;
                 }
             }
+            
+            // ========== BOUNCING STATE ==========
+            // Drops that bounced off - fall with air drag on horizontal movement
             else if (s === BOUNCING) {
-                // Bouncing droplet - apply gravity and check for re-collision
-                this.velY[i] += gravity * dt;
+                this.velY[i] += gravity * dt;  // Normal gravity
+                this.velX[i] *= CONFIG.BOUNCE_DRAG;  // Air drag on horizontal only
+                this.velZ[i] *= CONFIG.BOUNCE_DRAG;
                 
                 this.posX[i] += this.velX[i] * dt;
                 this.posY[i] += this.velY[i] * dt;
                 this.posZ[i] += this.velZ[i] * dt;
                 
-                this.stickTime[i] += dt;
+                this.size[i] *= (1 - dt * CONFIG.DRIP_SHRINK_RATE);
                 
-                // Check if it hits surface again
-                const dist = this.sampleSDF(this.posX[i], this.posY[i], this.posZ[i]);
-                
-                if (dist < 0.3) {
-                    this.sdfGradient(this.posX[i], this.posY[i], this.posZ[i], normal);
-                    const push = 0.15 - dist;
-                    this.posX[i] += normal.x * push;
-                    this.posY[i] += normal.y * push;
-                    this.posZ[i] += normal.z * push;
-                    
-                    // After bouncing, more likely to stick
-                    if (Math.random() < 0.6 || this.stickTime[i] > 0.5) {
-                        this.velX[i] = 0;
-                        this.velY[i] = 0;
-                        this.velZ[i] = 0;
-                        this.state[i] = STUCK;
-                        this.stickTime[i] = 0;
-                    } else {
-                        // Bounce again but weaker
-                        const dotVN = this.velX[i]*normal.x + this.velY[i]*normal.y + this.velZ[i]*normal.z;
-                        this.velX[i] = (this.velX[i] - 2*dotVN*normal.x) * 0.3;
-                        this.velY[i] = (this.velY[i] - 2*dotVN*normal.y) * 0.3 + 2;
-                        this.velZ[i] = (this.velZ[i] - 2*dotVN*normal.z) * 0.3;
-                    }
-                }
-                
-                // Bounced off into space - becomes dripping
-                if (this.posY[i] < -5 || this.stickTime[i] > 1.5) {
-                    this.state[i] = DRIPPING;
-                }
-                
-                // Remove if way off screen
-                if (this.posY[i] < -20 || Math.abs(this.posX[i]) > 30) {
+                if (this.posY[i] < CONFIG.DRIP_REMOVE_Y || this.size[i] < CONFIG.DRIP_MIN_SIZE) {
                     this.state[i] = INACTIVE;
                     this.size[i] = 0;
                 }
             }
+            
+            // ========== STUCK STATE ==========
+            // Drops stuck on letters briefly, then drip straight down
             else if (s === STUCK) {
                 this.stickTime[i] += dt;
                 
-                // Very small jitter for realism
-                this.posX[i] += Math.sin(time * 6 + this.posY[i] * 3) * 0.0002;
+                // Subtle jitter for realism
+                this.posX[i] += Math.sin(time * CONFIG.STICK_JITTER_SPEED + this.posY[i] * 3) * CONFIG.STICK_JITTER_AMOUNT;
                 
-                // Quick stick then start sliding (0.3-0.8s)
-                if (this.stickTime[i] > 0.3 + this.slideSpeed[i] * 0.5) {
-                    this.state[i] = SLIDING;
+                // Wait, then start dripping (staggered by slideSpeed random value)
+                const stickDuration = CONFIG.STICK_DURATION_MIN + 
+                    this.slideSpeed[i] * (CONFIG.STICK_DURATION_MAX - CONFIG.STICK_DURATION_MIN);
+                
+                if (this.stickTime[i] > stickDuration) {
+                    // Skip SLIDING - go straight to DRIPPING
+                    this.state[i] = DRIPPING;
+                    this.velY[i] = CONFIG.DRIP_INITIAL_VELOCITY;
                 }
             }
+            
+            // ========== SLIDING STATE ==========
+            // Drops slowly sliding down the letter surface
             else if (s === SLIDING) {
-                // Get surface normal
                 this.sdfGradient(this.posX[i], this.posY[i], this.posZ[i], normal);
                 
-                // Gravity tangent to surface - slide down
+                // Calculate gravity tangent to surface
                 const dot = gravity * normal.y;
                 const tanX = -normal.x * dot;
                 const tanY = gravity - normal.y * dot;
                 const tanZ = -normal.z * dot;
                 
-                // Fast slide speed
-                const speed = 0.8 + this.slideSpeed[i] * 0.4;
+                // Slide speed (slower = more realistic drip)
+                const speed = CONFIG.SLIDE_SPEED_MIN + 
+                    this.slideSpeed[i] * (CONFIG.SLIDE_SPEED_MAX - CONFIG.SLIDE_SPEED_MIN);
+                
                 this.velX[i] = tanX * speed;
                 this.velY[i] = tanY * speed;
                 this.velZ[i] = tanZ * speed;
                 
-                // Move
                 this.posX[i] += this.velX[i] * dt;
                 this.posY[i] += this.velY[i] * dt;
                 this.posZ[i] += this.velZ[i] * dt;
@@ -393,11 +372,11 @@ export class ParticleSystem {
                 // Check if still on surface
                 const dist = this.sampleSDF(this.posX[i], this.posY[i], this.posZ[i]);
                 
-                // Left surface OR reached bottom of letter - start dripping!
+                // Left surface OR reached letter bottom - start dripping
                 if (dist > 0.4 || this.posY[i] < this.sdf.bbox.min.y + 0.3) {
                     this.state[i] = DRIPPING;
                     this.velX[i] *= 0.3;
-                    this.velY[i] = -2;  // Start falling
+                    this.velY[i] = CONFIG.DRIP_INITIAL_VELOCITY;
                     this.velZ[i] *= 0.3;
                 } else if (dist < 0.08) {
                     // Push back to surface
@@ -407,14 +386,20 @@ export class ParticleSystem {
                 }
                 
                 this.stickTime[i] += dt;
-                // Max slide time 2-3 seconds then drip
-                if (this.stickTime[i] > 2.0 + this.slideSpeed[i] * 1.0) {
+                
+                // Max slide time then force drip (staggered)
+                const maxSlide = CONFIG.SLIDE_DURATION_MIN + 
+                    this.slideSpeed[i] * (CONFIG.SLIDE_DURATION_MAX - CONFIG.SLIDE_DURATION_MIN);
+                
+                if (this.stickTime[i] > maxSlide) {
                     this.state[i] = DRIPPING;
-                    this.velY[i] = -1.5;
+                    this.velY[i] = CONFIG.DRIP_INITIAL_VELOCITY;
                 }
             }
+            
+            // ========== DRIPPING STATE ==========
+            // Final fall to bottom of screen
             else if (s === DRIPPING) {
-                // Fall straight down with gravity - all the way to bottom!
                 this.velY[i] += gravity * dt;
                 this.velX[i] *= 0.99;
                 this.velZ[i] *= 0.99;
@@ -423,11 +408,9 @@ export class ParticleSystem {
                 this.posY[i] += this.velY[i] * dt;
                 this.posZ[i] += this.velZ[i] * dt;
                 
-                // Slight shrink as it falls
-                this.size[i] *= (1 - dt * 0.08);
+                this.size[i] *= (1 - dt * CONFIG.DRIP_SHRINK_RATE);
                 
-                // Remove only when way off bottom of screen
-                if (this.posY[i] < -20 || this.size[i] < 0.015) {
+                if (this.posY[i] < CONFIG.DRIP_REMOVE_Y || this.size[i] < CONFIG.DRIP_MIN_SIZE) {
                     this.state[i] = INACTIVE;
                     this.size[i] = 0;
                 }
