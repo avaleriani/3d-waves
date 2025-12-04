@@ -6,15 +6,22 @@ import { ParticleSystem, generateSDF } from './gpu-particles.js';
 // ============================================
 // CONFIGURATION
 // ============================================
-const MAX_PARTICLES = 100000;  // 100K particles with SoA layout
-const SPAWN_RATE = 400;        // Particles per frame during wave
+const MAX_PARTICLES = 200000;  // 200K particles for MASSIVE splash
+const SPAWN_RATE = 5000;       // HUGE splash - like a bucket thrown at the letters!
 const SDF_RESOLUTION = 64;     // Higher resolution = better letter shapes
+
+// ============================================
+// VIDEO SYNC CONFIG - Adjust these to match your wave video!
+// ============================================
+const VIDEO_WAVE_HIT_TIME = 2.0;    // Seconds into video when wave hits (start spawning)
+const VIDEO_WAVE_END_TIME = 2.8;    // SHORT burst - like a bucket splash!
+const VIDEO_LOOP_DURATION = 10.0;   // Total video loop duration
 
 // ============================================
 // SCENE SETUP
 // ============================================
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x000008);
+scene.background = null;  // Transparent - video shows through
 
 const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
 camera.position.set(0, 1, 22);
@@ -23,8 +30,10 @@ camera.lookAt(0, 0, 0);
 const renderer = new THREE.WebGLRenderer({ 
     canvas: document.getElementById('canvas'),
     antialias: true,
+    alpha: true,  // Transparent background
     powerPreference: "high-performance"
 });
+renderer.setClearColor(0x000000, 0);  // Fully transparent
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -87,8 +96,9 @@ function createParticleRenderer() {
                 vState = state.x;
                 vSize = state.z;
                 
-                // Hide inactive particles
-                if (vState > 3.5 || vSize < 0.01) {
+                // Hide FALLING (0) and INACTIVE (4) particles
+                // Show STUCK (1), SLIDING (2), DRIPPING (3), BOUNCING (5)
+                if (vState < 0.5 || (vState > 3.5 && vState < 4.5) || vSize < 0.01) {
                     gl_Position = vec4(0.0, 0.0, -1000.0, 1.0);
                     gl_PointSize = 0.0;
                     return;
@@ -112,7 +122,8 @@ function createParticleRenderer() {
             varying vec3 vViewPos;
             
             void main() {
-                if (vState > 3.5 || vSize < 0.01) discard;
+                // Only render STUCK, SLIDING, DRIPPING, BOUNCING
+                if (vState < 0.5 || (vState > 3.5 && vState < 4.5) || vSize < 0.01) discard;
                 
                 // Circular shape
                 vec2 center = gl_PointCoord - 0.5;
@@ -214,18 +225,20 @@ function spawnFromWave(waveZ) {
     const centerY = (textBBox.max.y + textBBox.min.y) / 2;
     
     for (let i = 0; i < count; i++) {
-        // Spawn position - tightly over text bounds
-        positions[i * 3] = centerX + (Math.random() - 0.5) * width;
-        positions[i * 3 + 1] = centerY + (Math.random() - 0.5) * height;
-        positions[i * 3 + 2] = waveZ + Math.random() * 1;
+        // Spawn position - wide spread like water exploding on impact
+        positions[i * 3] = centerX + (Math.random() - 0.5) * width * 1.5;
+        positions[i * 3 + 1] = centerY + (Math.random() - 0.5) * height * 1.5;
+        positions[i * 3 + 2] = 6 + Math.random() * 5;
         
-        // Velocity: straight toward text with slight spread
-        velocities[i * 3] = (Math.random() - 0.5) * 0.8;
-        velocities[i * 3 + 1] = (Math.random() - 0.5) * 1.2;
-        velocities[i * 3 + 2] = -20 - Math.random() * 8;  // Fast toward text (neg Z)
+        // Velocity: CHAOTIC splash - water flying everywhere!
+        const angle = Math.random() * Math.PI * 2;
+        const spread = Math.random() * 4;
+        velocities[i * 3] = Math.cos(angle) * spread + (Math.random() - 0.5) * 3;
+        velocities[i * 3 + 1] = Math.sin(angle) * spread + (Math.random() - 0.5) * 5;
+        velocities[i * 3 + 2] = -30 - Math.random() * 15;  // FAST toward text
         
-        sizes[i] = 0.08 + Math.random() * 0.1;
-        slideSpeeds[i] = 0.5 + Math.random() * 1.0;
+        sizes[i] = 0.06 + Math.random() * 0.1;  // Varied sizes
+        slideSpeeds[i] = 1.0 + Math.random() * 0.5;
     }
     
     particles.spawn(positions, velocities, sizes, slideSpeeds);
@@ -382,21 +395,26 @@ function createText() {
         
         console.log('Text geometry ready');
         initParticleSystem(geometry);
+        
+        // Hide loader after everything is ready
+        const loader = document.getElementById('loader');
+        if (loader) {
+            loader.classList.add('hidden');
+            setTimeout(() => loader.remove(), 500);
+        }
     });
 }
 
 // ============================================
-// ANIMATION
+// ANIMATION - VIDEO SYNCED (with fallback)
 // ============================================
-const waveState = {
-    z: 24,
-    speed: 9,
-    waiting: false,
-    waitTimer: 0
-};
-
+const video = document.getElementById('video-bg');
 let lastTime = performance.now();
-let frameCount = 0;
+let wasSpawning = false;
+let fallbackTime = 0;  // Used when no video
+
+// Check if video is available
+const hasVideo = video && video.src && video.readyState > 0;
 
 function animate() {
     requestAnimationFrame(animate);
@@ -406,47 +424,42 @@ function animate() {
     lastTime = now;
     const time = now * 0.001;
     
-    frameCount++;
-    
-    // Wave state machine
-    if (waveState.waiting) {
-        waveState.waitTimer += dt;
-        
-        // Wait until most particles drained
-        if (frameCount % 30 === 0 && particles) {
-            const onText = particles.countOnText();
-            const drained = onText < MAX_PARTICLES * 0.02; // 98% gone
-            
-            if (drained || waveState.waitTimer > 6.0) {
-                waveState.z = 24;
-                waveState.waiting = false;
-                waveState.waitTimer = 0;
-                particles.reset();
-            }
-        }
+    // Get video time, or use fallback timer if no video
+    let videoTime;
+    if (video && video.readyState >= 2) {
+        videoTime = video.currentTime;
     } else {
-        waveState.z -= waveState.speed * dt;
-        
-        // Spawn particles when wave approaches and passes through text
-        // Text is at Z=0, spawn from Z=10 down to Z=-3
-        if (waveState.z < 12 && waveState.z > -3) {
-            spawnFromWave(waveState.z + 2);
+        // Fallback: simulate video timing
+        fallbackTime += dt;
+        if (fallbackTime > VIDEO_LOOP_DURATION) {
+            fallbackTime = 0;
+            if (particles) particles.reset();
         }
-        
-        if (waveState.z < -12) {
-            waveState.waiting = true;
-            waveState.waitTimer = 0;
-            waveMesh.visible = false;
-        }
+        videoTime = fallbackTime;
     }
     
-    // Update wave mesh
-    if (!waveState.waiting) {
-        waveMesh.position.set(0, -1, waveState.z);
-        waveMesh.rotation.y = Math.PI;
-        waveMaterial.uniforms.time.value = time;
-        waveMesh.visible = waveState.z > -8;
+    // Check if we're in the wave hit window
+    const isWaveHitting = videoTime >= VIDEO_WAVE_HIT_TIME && videoTime <= VIDEO_WAVE_END_TIME;
+    
+    // Spawn particles when video wave is hitting
+    if (isWaveHitting && particles) {
+        // Calculate spawn Z based on progress through wave
+        const progress = (videoTime - VIDEO_WAVE_HIT_TIME) / (VIDEO_WAVE_END_TIME - VIDEO_WAVE_HIT_TIME);
+        const spawnZ = 15 - progress * 15;  // From Z=15 to Z=0
+        spawnFromWave(spawnZ);
     }
+    
+    // Reset particles when video loops (detect transition from end to start)
+    if (wasSpawning && !isWaveHitting && videoTime < VIDEO_WAVE_HIT_TIME) {
+        // Video looped or wave passed - let particles drain naturally
+        if (particles && particles.countOnText() < 100) {
+            particles.reset();
+        }
+    }
+    wasSpawning = isWaveHitting;
+    
+    // Hide wave mesh - we're using video now
+    waveMesh.visible = false;
     
     // Particle physics (SoA + SDF collision)
     if (particles) {
@@ -474,4 +487,5 @@ window.addEventListener('resize', () => {
 createText();
 animate();
 
-console.log(`Particle System: ${MAX_PARTICLES.toLocaleString()} particles, SoA layout, SDF collision`);
+console.log(`Particle System: ${MAX_PARTICLES.toLocaleString()} particles, video-synced`);
+console.log(`Video sync: wave hits at ${VIDEO_WAVE_HIT_TIME}s, ends at ${VIDEO_WAVE_END_TIME}s`);

@@ -10,6 +10,7 @@ const STUCK = 1;
 const SLIDING = 2;
 const DRIPPING = 3;
 const INACTIVE = 4;
+const BOUNCING = 5;  // New state for splash rebound!
 
 // Generate 3D Signed Distance Field from geometry
 export function generateSDF(geometry, resolution = 64) {
@@ -237,7 +238,7 @@ export class ParticleSystem {
     
     // Update all particles - tight loop, cache friendly
     update(dt, time) {
-        const gravity = -12.0;
+        const gravity = -9.8;  // Natural gravity
         const normal = { x: 0, y: 0, z: 0 };
         
         let activeCount = 0;
@@ -257,31 +258,102 @@ export class ParticleSystem {
                 this.posY[i] += this.velY[i] * dt;
                 this.posZ[i] += this.velZ[i] * dt;
                 
-                // Check collision with SDF - use tighter threshold for precision
+                // Check collision with SDF
                 const dist = this.sampleSDF(this.posX[i], this.posY[i], this.posZ[i]);
                 
-                // Stick if close to letter surface
                 if (dist < 0.35) {
-                    // Hit surface!
+                    // HIT! Calculate impact speed
+                    const speed = Math.sqrt(this.velX[i]**2 + this.velY[i]**2 + this.velZ[i]**2);
                     this.sdfGradient(this.posX[i], this.posY[i], this.posZ[i], normal);
                     
-                    // Push to surface (sit right on it)
-                    const targetDist = 0.1;
-                    const push = targetDist - dist;
+                    // Push out of surface
+                    const push = 0.15 - dist;
                     this.posX[i] += normal.x * push;
                     this.posY[i] += normal.y * push;
                     this.posZ[i] += normal.z * push;
                     
-                    // Stop and stick
-                    this.velX[i] = 0;
-                    this.velY[i] = 0;
-                    this.velZ[i] = 0;
-                    this.state[i] = STUCK;
-                    this.stickTime[i] = 0;
+                    // SPLASH DECISION: bounce or stick based on impact speed & randomness
+                    const bounceChance = Math.min(0.7, speed / 40);  // Faster = more likely to bounce
+                    
+                    if (Math.random() < bounceChance) {
+                        // BOUNCE! Reflect velocity off surface
+                        const dotVN = this.velX[i]*normal.x + this.velY[i]*normal.y + this.velZ[i]*normal.z;
+                        
+                        // Reflect with energy loss
+                        const restitution = 0.3 + Math.random() * 0.4;  // 30-70% energy kept
+                        this.velX[i] = (this.velX[i] - 2*dotVN*normal.x) * restitution;
+                        this.velY[i] = (this.velY[i] - 2*dotVN*normal.y) * restitution;
+                        this.velZ[i] = (this.velZ[i] - 2*dotVN*normal.z) * restitution;
+                        
+                        // Add random splash scatter
+                        this.velX[i] += (Math.random() - 0.5) * 8;
+                        this.velY[i] += (Math.random() - 0.5) * 8 + 3;  // Upward bias
+                        this.velZ[i] += (Math.random() - 0.5) * 5;
+                        
+                        this.state[i] = BOUNCING;
+                        this.stickTime[i] = 0;  // Track bounces
+                        
+                        // Some drops split smaller on impact
+                        this.size[i] *= (0.6 + Math.random() * 0.4);
+                    } else {
+                        // STICK to surface
+                        this.velX[i] = 0;
+                        this.velY[i] = 0;
+                        this.velZ[i] = 0;
+                        this.state[i] = STUCK;
+                        this.stickTime[i] = 0;
+                    }
                 }
                 
-                // Remove if fallen too far or behind text
-                if (this.posY[i] < -12 || this.posZ[i] < -8) {
+                // Remove if fallen too far
+                if (this.posY[i] < -20 || this.posZ[i] < -10) {
+                    this.state[i] = INACTIVE;
+                    this.size[i] = 0;
+                }
+            }
+            else if (s === BOUNCING) {
+                // Bouncing droplet - apply gravity and check for re-collision
+                this.velY[i] += gravity * dt;
+                
+                this.posX[i] += this.velX[i] * dt;
+                this.posY[i] += this.velY[i] * dt;
+                this.posZ[i] += this.velZ[i] * dt;
+                
+                this.stickTime[i] += dt;
+                
+                // Check if it hits surface again
+                const dist = this.sampleSDF(this.posX[i], this.posY[i], this.posZ[i]);
+                
+                if (dist < 0.3) {
+                    this.sdfGradient(this.posX[i], this.posY[i], this.posZ[i], normal);
+                    const push = 0.15 - dist;
+                    this.posX[i] += normal.x * push;
+                    this.posY[i] += normal.y * push;
+                    this.posZ[i] += normal.z * push;
+                    
+                    // After bouncing, more likely to stick
+                    if (Math.random() < 0.6 || this.stickTime[i] > 0.5) {
+                        this.velX[i] = 0;
+                        this.velY[i] = 0;
+                        this.velZ[i] = 0;
+                        this.state[i] = STUCK;
+                        this.stickTime[i] = 0;
+                    } else {
+                        // Bounce again but weaker
+                        const dotVN = this.velX[i]*normal.x + this.velY[i]*normal.y + this.velZ[i]*normal.z;
+                        this.velX[i] = (this.velX[i] - 2*dotVN*normal.x) * 0.3;
+                        this.velY[i] = (this.velY[i] - 2*dotVN*normal.y) * 0.3 + 2;
+                        this.velZ[i] = (this.velZ[i] - 2*dotVN*normal.z) * 0.3;
+                    }
+                }
+                
+                // Bounced off into space - becomes dripping
+                if (this.posY[i] < -5 || this.stickTime[i] > 1.5) {
+                    this.state[i] = DRIPPING;
+                }
+                
+                // Remove if way off screen
+                if (this.posY[i] < -20 || Math.abs(this.posX[i]) > 30) {
                     this.state[i] = INACTIVE;
                     this.size[i] = 0;
                 }
@@ -290,10 +362,10 @@ export class ParticleSystem {
                 this.stickTime[i] += dt;
                 
                 // Very small jitter for realism
-                this.posX[i] += Math.sin(time * 8 + this.posY[i] * 4) * 0.0003;
+                this.posX[i] += Math.sin(time * 6 + this.posY[i] * 3) * 0.0002;
                 
-                // Stay stuck longer - forms visible letters
-                if (this.stickTime[i] > 1.0 + this.slideSpeed[i] * 1.5) {
+                // Quick stick then start sliding (0.3-0.8s)
+                if (this.stickTime[i] > 0.3 + this.slideSpeed[i] * 0.5) {
                     this.state[i] = SLIDING;
                 }
             }
@@ -301,14 +373,14 @@ export class ParticleSystem {
                 // Get surface normal
                 this.sdfGradient(this.posX[i], this.posY[i], this.posZ[i], normal);
                 
-                // Gravity tangent to surface - slower sliding
+                // Gravity tangent to surface - slide down
                 const dot = gravity * normal.y;
                 const tanX = -normal.x * dot;
                 const tanY = gravity - normal.y * dot;
                 const tanZ = -normal.z * dot;
                 
-                // Slower slide velocity for more realistic water behavior
-                const speed = this.slideSpeed[i] * 0.6;
+                // Fast slide speed
+                const speed = 0.8 + this.slideSpeed[i] * 0.4;
                 this.velX[i] = tanX * speed;
                 this.velY[i] = tanY * speed;
                 this.velZ[i] = tanZ * speed;
@@ -321,34 +393,41 @@ export class ParticleSystem {
                 // Check if still on surface
                 const dist = this.sampleSDF(this.posX[i], this.posY[i], this.posZ[i]);
                 
-                if (dist > 0.6) {
-                    // Left surface - drip
+                // Left surface OR reached bottom of letter - start dripping!
+                if (dist > 0.4 || this.posY[i] < this.sdf.bbox.min.y + 0.3) {
                     this.state[i] = DRIPPING;
-                    this.velY[i] = -1.5;
+                    this.velX[i] *= 0.3;
+                    this.velY[i] = -2;  // Start falling
+                    this.velZ[i] *= 0.3;
                 } else if (dist < 0.08) {
                     // Push back to surface
-                    this.posX[i] += normal.x * (0.15 - dist);
-                    this.posY[i] += normal.y * (0.15 - dist);
-                    this.posZ[i] += normal.z * (0.15 - dist);
+                    this.posX[i] += normal.x * (0.12 - dist);
+                    this.posY[i] += normal.y * (0.12 - dist);
+                    this.posZ[i] += normal.z * (0.12 - dist);
                 }
                 
                 this.stickTime[i] += dt;
-                if (this.stickTime[i] > 8.0) {
+                // Max slide time 2-3 seconds then drip
+                if (this.stickTime[i] > 2.0 + this.slideSpeed[i] * 1.0) {
                     this.state[i] = DRIPPING;
-                    this.velY[i] = -1;
+                    this.velY[i] = -1.5;
                 }
             }
             else if (s === DRIPPING) {
-                // Fall with gravity
+                // Fall straight down with gravity - all the way to bottom!
                 this.velY[i] += gravity * dt;
+                this.velX[i] *= 0.99;
+                this.velZ[i] *= 0.99;
+                
                 this.posX[i] += this.velX[i] * dt;
                 this.posY[i] += this.velY[i] * dt;
                 this.posZ[i] += this.velZ[i] * dt;
                 
-                // Shrink
-                this.size[i] *= (1 - dt * 0.4);
+                // Slight shrink as it falls
+                this.size[i] *= (1 - dt * 0.08);
                 
-                if (this.posY[i] < -10 || this.size[i] < 0.01) {
+                // Remove only when way off bottom of screen
+                if (this.posY[i] < -20 || this.size[i] < 0.015) {
                     this.state[i] = INACTIVE;
                     this.size[i] = 0;
                 }
