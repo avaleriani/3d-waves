@@ -58,6 +58,59 @@
             pointer-events: none;
         }
         
+        /* Recalculating overlay */
+        #recalculating {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 8, 0.7);
+            backdrop-filter: blur(8px);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 500;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease-out;
+        }
+        
+        #recalculating.visible {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        
+        .recalc-content {
+            text-align: center;
+        }
+        
+        .recalc-spinner {
+            width: 60px;
+            height: 60px;
+            border: 3px solid rgba(100, 180, 255, 0.15);
+            border-top-color: #60a5fa;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto 20px;
+        }
+        
+        .recalc-text {
+            color: #60a5fa;
+            font-size: 16px;
+            font-weight: 500;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+        
+        .recalc-subtext {
+            color: rgba(255, 255, 255, 0.5);
+            font-size: 12px;
+            letter-spacing: 1px;
+        }
+        
         .spinner {
             width: 50px;
             height: 50px;
@@ -79,134 +132,241 @@
             to { transform: rotate(360deg); }
         }
         
-        /* Control Panel */
+        /* Control Panel - Glassmorphism Design */
+        @keyframes shimmer {
+            0% { background-position: -200% 0; }
+            100% { background-position: 200% 0; }
+        }
+        
+        @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-3px); }
+        }
+        
+        @keyframes glow {
+            0%, 100% { box-shadow: 0 0 20px rgba(100, 180, 255, 0.3), inset 0 0 30px rgba(100, 180, 255, 0.05); }
+            50% { box-shadow: 0 0 30px rgba(100, 180, 255, 0.5), inset 0 0 40px rgba(100, 180, 255, 0.1); }
+        }
+        
         #controls {
             position: fixed;
             top: 20px;
             right: 20px;
-            background: rgba(0, 8, 20, 0.85);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(100, 180, 255, 0.2);
-            border-radius: 12px;
-            padding: 20px;
+            background: linear-gradient(135deg, rgba(10, 25, 50, 0.9) 0%, rgba(5, 15, 35, 0.95) 100%);
+            backdrop-filter: blur(20px) saturate(180%);
+            -webkit-backdrop-filter: blur(20px) saturate(180%);
+            border: 1px solid rgba(100, 180, 255, 0.15);
+            border-radius: 20px;
+            padding: 24px;
             z-index: 100;
-            width: 280px;
+            width: 300px;
             color: #fff;
             font-size: 13px;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            box-shadow: 
+                0 8px 32px rgba(0, 0, 0, 0.5),
+                0 0 60px rgba(100, 180, 255, 0.1),
+                inset 0 1px 0 rgba(255, 255, 255, 0.1);
+            animation: glow 4s ease-in-out infinite;
+            overflow: hidden;
+        }
+        
+        #controls::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(100, 180, 255, 0.5), transparent);
+        }
+        
+        #controls::after {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle at 30% 20%, rgba(100, 180, 255, 0.08) 0%, transparent 50%);
+            pointer-events: none;
         }
         
         #controls h3 {
-            margin: 0 0 15px 0;
-            font-size: 14px;
+            position: relative;
+            margin: 0 0 18px 0;
+            font-size: 13px;
             text-transform: uppercase;
-            letter-spacing: 2px;
-            color: #64b4ff;
+            letter-spacing: 3px;
+            color: transparent;
+            background: linear-gradient(135deg, #60a5fa, #38bdf8, #818cf8);
+            -webkit-background-clip: text;
+            background-clip: text;
             border-bottom: 1px solid rgba(100, 180, 255, 0.2);
-            padding-bottom: 10px;
+            padding-bottom: 12px;
+            font-weight: 600;
         }
         
         .control-group {
-            margin-bottom: 15px;
+            margin-bottom: 18px;
+            position: relative;
         }
         
         .control-group label {
             display: block;
-            margin-bottom: 6px;
-            color: rgba(255, 255, 255, 0.7);
-            font-size: 11px;
+            margin-bottom: 8px;
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 10px;
             text-transform: uppercase;
-            letter-spacing: 1px;
+            letter-spacing: 1.5px;
+            font-weight: 500;
         }
         
         #text-input {
             width: 100%;
-            padding: 10px 12px;
-            background: rgba(0, 0, 0, 0.3);
-            border: 1px solid rgba(100, 180, 255, 0.3);
-            border-radius: 6px;
+            padding: 12px 16px;
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(100, 180, 255, 0.2);
+            border-radius: 12px;
             color: #fff;
             font-size: 14px;
+            font-weight: 500;
             outline: none;
-            transition: border-color 0.2s;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.3);
         }
         
         #text-input:focus {
-            border-color: #64b4ff;
+            border-color: rgba(100, 180, 255, 0.5);
+            box-shadow: 
+                inset 0 2px 4px rgba(0, 0, 0, 0.3),
+                0 0 20px rgba(100, 180, 255, 0.2);
+        }
+        
+        #text-input::placeholder {
+            color: rgba(255, 255, 255, 0.3);
         }
         
         .font-buttons {
             display: flex;
             flex-wrap: wrap;
-            gap: 6px;
+            gap: 8px;
         }
         
         .font-btn {
-            padding: 8px 12px;
-            background: rgba(0, 0, 0, 0.3);
-            border: 1px solid rgba(100, 180, 255, 0.3);
-            border-radius: 6px;
-            color: #fff;
+            padding: 10px 14px;
+            background: linear-gradient(135deg, rgba(30, 40, 60, 0.8), rgba(20, 30, 50, 0.9));
+            border: 1px solid rgba(100, 180, 255, 0.15);
+            border-radius: 10px;
+            color: rgba(255, 255, 255, 0.7);
             font-size: 11px;
+            font-weight: 500;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .font-btn::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+            transition: left 0.5s;
+        }
+        
+        .font-btn:hover::before {
+            left: 100%;
         }
         
         .font-btn:hover {
-            background: rgba(100, 180, 255, 0.2);
-            border-color: #64b4ff;
+            background: linear-gradient(135deg, rgba(50, 70, 100, 0.9), rgba(30, 50, 80, 0.9));
+            border-color: rgba(100, 180, 255, 0.4);
+            color: #fff;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(100, 180, 255, 0.2);
         }
         
         .font-btn.active {
-            background: rgba(100, 180, 255, 0.3);
-            border-color: #64b4ff;
-            color: #64b4ff;
+            background: linear-gradient(135deg, rgba(60, 130, 200, 0.5), rgba(80, 150, 220, 0.4));
+            border-color: rgba(100, 180, 255, 0.6);
+            color: #60a5fa;
+            box-shadow: 
+                0 0 20px rgba(100, 180, 255, 0.3),
+                inset 0 0 15px rgba(100, 180, 255, 0.1);
         }
         
         .slider-container {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 12px;
         }
         
         .slider-container input[type="range"] {
             flex: 1;
             appearance: none;
             -webkit-appearance: none;
-            height: 4px;
-            background: rgba(100, 180, 255, 0.2);
-            border-radius: 2px;
+            height: 6px;
+            background: linear-gradient(90deg, rgba(100, 180, 255, 0.1), rgba(100, 180, 255, 0.3));
+            border-radius: 3px;
             outline: none;
+            cursor: pointer;
         }
         
         .slider-container input[type="range"]::-webkit-slider-thumb {
             appearance: none;
             -webkit-appearance: none;
-            width: 14px;
-            height: 14px;
-            background: #64b4ff;
+            width: 18px;
+            height: 18px;
+            background: linear-gradient(135deg, #60a5fa, #38bdf8);
             border-radius: 50%;
             cursor: pointer;
+            box-shadow: 
+                0 2px 10px rgba(100, 180, 255, 0.5),
+                0 0 20px rgba(100, 180, 255, 0.3);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .slider-container input[type="range"]::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+            box-shadow: 
+                0 2px 15px rgba(100, 180, 255, 0.7),
+                0 0 30px rgba(100, 180, 255, 0.4);
         }
         
         .slider-value {
-            min-width: 35px;
+            min-width: 40px;
             text-align: right;
-            color: #64b4ff;
+            color: #60a5fa;
             font-size: 12px;
+            font-weight: 600;
+            font-family: 'Courier New', monospace;
+            background: rgba(100, 180, 255, 0.1);
+            padding: 4px 8px;
+            border-radius: 6px;
         }
         
         .checkbox-group {
             display: flex;
-            gap: 12px;
+            gap: 16px;
             flex-wrap: wrap;
         }
         
         .checkbox-item {
             display: flex;
             align-items: center;
-            gap: 6px;
+            gap: 8px;
             cursor: pointer;
+            padding: 8px 12px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 10px;
+            transition: all 0.3s;
+        }
+        
+        .checkbox-item:hover {
+            background: rgba(100, 180, 255, 0.1);
         }
         
         .checkbox-item input {
@@ -214,61 +374,186 @@
         }
         
         .checkbox-box {
-            width: 18px;
-            height: 18px;
-            border: 1px solid rgba(100, 180, 255, 0.3);
-            border-radius: 4px;
+            width: 22px;
+            height: 22px;
+            border: 2px solid rgba(100, 180, 255, 0.3);
+            border-radius: 6px;
             display: flex;
             align-items: center;
             justify-content: center;
-            transition: all 0.2s;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
         }
         
         .checkbox-item input:checked + .checkbox-box {
-            background: rgba(100, 180, 255, 0.3);
-            border-color: #64b4ff;
+            background: linear-gradient(135deg, rgba(60, 130, 200, 0.6), rgba(100, 180, 255, 0.5));
+            border-color: #60a5fa;
+            box-shadow: 0 0 15px rgba(100, 180, 255, 0.4);
         }
         
         .checkbox-box::after {
             content: '\2713';
-            color: #64b4ff;
-            font-size: 12px;
+            color: #fff;
+            font-size: 14px;
+            font-weight: bold;
             opacity: 0;
-            transition: opacity 0.2s;
+            transform: scale(0);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
         
         .checkbox-item input:checked + .checkbox-box::after {
             opacity: 1;
+            transform: scale(1);
         }
         
         .checkbox-label {
             font-size: 12px;
             color: rgba(255, 255, 255, 0.8);
+            font-weight: 500;
         }
         
-        #apply-btn {
-            width: 100%;
-            padding: 12px;
-            background: linear-gradient(135deg, #1a5a8a, #2a7ab8);
+        .btn-primary {
+            flex: 1;
+            padding: 14px 20px;
+            background: linear-gradient(135deg, #3b82f6, #2563eb, #1d4ed8);
+            background-size: 200% 200%;
             border: none;
-            border-radius: 6px;
+            border-radius: 12px;
             color: #fff;
             font-size: 13px;
-            font-weight: bold;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+            box-shadow: 
+                0 4px 15px rgba(59, 130, 246, 0.4),
+                inset 0 1px 0 rgba(255, 255, 255, 0.2);
+        }
+        
+        .btn-primary::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+            transition: left 0.6s;
+        }
+        
+        .btn-primary:hover::before {
+            left: 100%;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 
+                0 6px 25px rgba(59, 130, 246, 0.5),
+                inset 0 1px 0 rgba(255, 255, 255, 0.2);
+            background-position: 100% 0;
+        }
+        
+        .btn-primary:active {
+            transform: translateY(0);
+        }
+        
+        .btn-secondary {
+            flex: 0 0 auto;
+            padding: 14px 18px;
+            background: linear-gradient(135deg, rgba(239, 68, 68, 0.2), rgba(220, 38, 38, 0.3));
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            border-radius: 12px;
+            color: #f87171;
+            font-size: 11px;
+            font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 1px;
             cursor: pointer;
-            transition: all 0.2s;
-            margin-top: 10px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
         
-        #apply-btn:hover {
-            background: linear-gradient(135deg, #2a7ab8, #3a9ae8);
-            transform: translateY(-1px);
+        .btn-secondary:hover {
+            background: linear-gradient(135deg, rgba(239, 68, 68, 0.3), rgba(220, 38, 38, 0.4));
+            border-color: rgba(239, 68, 68, 0.5);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(239, 68, 68, 0.2);
         }
         
-        #apply-btn:active {
-            transform: translateY(0);
+        .button-row {
+            display: flex;
+            gap: 10px;
+            margin-top: 16px;
+        }
+        
+        .close-btn {
+            position: absolute;
+            top: 14px;
+            right: 14px;
+            width: 28px;
+            height: 28px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            color: rgba(255, 255, 255, 0.5);
+            font-size: 16px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s;
+        }
+        
+        .close-btn:hover {
+            background: rgba(239, 68, 68, 0.2);
+            border-color: rgba(239, 68, 68, 0.3);
+            color: #f87171;
+            transform: rotate(90deg);
+        }
+        
+        .backend-info {
+            margin-top: 16px;
+            padding: 12px 16px;
+            background: linear-gradient(135deg, rgba(0, 255, 136, 0.08), rgba(0, 200, 100, 0.05));
+            border: 1px solid rgba(0, 255, 136, 0.15);
+            border-radius: 12px;
+            font-size: 11px;
+            color: rgba(255, 255, 255, 0.6);
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .backend-info::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(0, 255, 136, 0.3), transparent);
+        }
+        
+        .credit-info {
+            margin-top: 16px;
+            padding-top: 12px;
+            border-top: 1px solid rgba(100, 180, 255, 0.1);
+            font-size: 11px;
+            color: rgba(255, 255, 255, 0.4);
+            text-align: center;
+        }
+        
+        .credit-info a {
+            color: rgba(100, 180, 255, 0.6);
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+        
+        .credit-info a:hover {
+            color: rgba(100, 180, 255, 1);
         }
         
         /* Toggle button */
@@ -276,26 +561,40 @@
             position: fixed;
             top: 20px;
             right: 20px;
-            width: 40px;
-            height: 40px;
-            background: rgba(0, 8, 20, 0.85);
-            border: 1px solid rgba(100, 180, 255, 0.3);
-            border-radius: 8px;
-            color: #64b4ff;
-            font-size: 20px;
+            width: 48px;
+            height: 48px;
+            background: linear-gradient(135deg, rgba(10, 25, 50, 0.9), rgba(5, 15, 35, 0.95));
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(100, 180, 255, 0.2);
+            border-radius: 14px;
+            color: #60a5fa;
+            font-size: 22px;
             cursor: pointer;
             z-index: 99;
             display: none;
             align-items: center;
             justify-content: center;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 
+                0 4px 20px rgba(0, 0, 0, 0.4),
+                0 0 30px rgba(100, 180, 255, 0.1);
+        }
+        
+        #toggle-controls:hover {
+            transform: rotate(90deg) scale(1.1);
+            box-shadow: 
+                0 6px 25px rgba(0, 0, 0, 0.5),
+                0 0 40px rgba(100, 180, 255, 0.2);
         }
         
         #controls.hidden {
-            display: none;
+            opacity: 0;
+            pointer-events: none;
+            transform: translateX(100%);
         }
         
         #controls.hidden + #toggle-controls {
-            display: flex;
+            display: flex !important;
         }
     </style>
 </head>
@@ -304,16 +603,26 @@
         <div class="spinner"></div>
         <div class="loader-text">Loading...</div>
     </div>
+    
+    <!-- Recalculating overlay -->
+    <div id="recalculating">
+        <div class="recalc-content">
+            <div class="recalc-spinner"></div>
+            <div class="recalc-text">Recalculating</div>
+            <div class="recalc-subtext" id="recalc-status">Generating collision map...</div>
+        </div>
+    </div>
+    
     <!-- Video background - replace src with your wave video -->
-    <video id="video-bg" autoplay muted loop playsinline>
-        <source src="/wave.mp4" type="video/mp4">
+    <video id="video-bg" muted loop playsinline>
+        <source src="./video.mp4" type="video/mp4">
     </video>
     
     <canvas id="canvas"></canvas>
     
     <!-- Control Panel -->
     <div id="controls">
-        <button id="close-controls" style="position:absolute;top:10px;right:10px;background:none;border:none;color:#64b4ff;font-size:18px;cursor:pointer;">&times;</button>
+        <button id="close-controls" class="close-btn">&times;</button>
         <h3>Text Settings</h3>
         
         <div class="control-group">
@@ -351,8 +660,8 @@
         <div class="control-group">
             <label>Letter Spacing</label>
             <div class="slider-container">
-                <input type="range" id="spacing-slider" min="-0.5" max="2" step="0.05" value="0">
-                <span class="slider-value" id="spacing-value">0</span>
+                <input type="range" id="spacing-slider" min="-0.5" max="2" step="0.05" value="0.5">
+                <span class="slider-value" id="spacing-value">0.50</span>
             </div>
         </div>
         
@@ -388,13 +697,17 @@
             </div>
         </div>
         
-        <div style="display:flex;gap:8px;margin-top:10px;">
-            <button id="apply-btn" style="flex:1;">Apply Changes</button>
-            <button id="reset-btn" style="flex:0 0 auto;padding:12px 16px;background:rgba(255,100,100,0.2);border:1px solid rgba(255,100,100,0.4);border-radius:6px;color:#ff9999;font-size:12px;cursor:pointer;">Reset</button>
+        <div class="button-row">
+            <button id="apply-btn" class="btn-primary">Apply Changes</button>
+            <button id="reset-btn" class="btn-secondary">Reset</button>
         </div>
         
-        <div id="backend-info" style="margin-top:12px;padding:8px;background:rgba(0,255,100,0.1);border:1px solid rgba(0,255,100,0.2);border-radius:6px;font-size:11px;color:rgba(255,255,255,0.6);text-align:center;">
+        <div class="backend-info">
             Backend: <span id="backend-type">Initializing...</span>
+        </div>
+        
+        <div class="credit-info">
+            made by <a href="https://agustinvaleriani.com" target="_blank">agustinvaleriani.com</a>
         </div>
     </div>
     <button id="toggle-controls">&#9881;</button>

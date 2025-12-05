@@ -165,33 +165,44 @@ const PARTICLE_SHADER = /* wgsl */`
             let pos = vec3f(posX, posY, posZ);
             let dist = sampleSDF(pos);
             
-            if (dist < 0.35) {
+            if (dist < 0.2) {
                 let normal = sdfGradient(pos);
-                let push = 0.15 - dist;
-                posX = posX + normal.x * push;
-                posY = posY + normal.y * push;
-                posZ = posZ + normal.z * push;
                 
-                // Decide bounce or stick
-                if (rand(seed) < config.bounceChance) {
-                    // BOUNCE
-                    let vel = vec3f(velX, velY, velZ);
-                    let dotVN = dot(vel, normal);
-                    let restitution = config.bounceRestitutionMin + 
-                        rand(seed + 1u) * (config.bounceRestitutionMax - config.bounceRestitutionMin);
+                // Only collide if:
+                // 1. Hitting FRONT face of text (normal pointing toward camera)
+                // 2. Particle Z is near the FRONT of the text (not deep in gaps between letters)
+                // The front of the text is at sdfMaxZ, particles in gaps have lower Z
+                let frontThreshold = config.sdfMaxZ - 1.5; // Allow collision in front portion of text
+                let isFrontFacing = normal.z > 0.5;
+                let isNearFront = posZ > frontThreshold;
+                
+                if (isFrontFacing && isNearFront) {
+                    let push = 0.1 - dist;
+                    posX = posX + normal.x * push;
+                    posY = posY + normal.y * push;
+                    posZ = posZ + normal.z * push;
                     
-                    let reflected = (vel - 2.0 * dotVN * normal) * restitution;
-                    velX = reflected.x + (rand(seed + 2u) - 0.5) * config.bounceScatter * 2.0;
-                    velY = reflected.y + (rand(seed + 3u) - 0.5) * config.bounceScatter + config.splashUpwardBias;
-                    velZ = reflected.z + (rand(seed + 4u) - 0.5) * config.bounceScatter;
-                    
-                    state = 5.0; // BOUNCING
-                    size = size * (config.bounceSizeReduction + rand(seed + 5u) * 0.3);
-                } else {
-                    // STICK
-                    velX = 0.0; velY = 0.0; velZ = 0.0;
-                    state = 1.0; // STUCK
-                    stickTime = 0.0;
+                    // Decide bounce or stick
+                    if (rand(seed) < config.bounceChance) {
+                        // BOUNCE
+                        let vel = vec3f(velX, velY, velZ);
+                        let dotVN = dot(vel, normal);
+                        let restitution = config.bounceRestitutionMin + 
+                            rand(seed + 1u) * (config.bounceRestitutionMax - config.bounceRestitutionMin);
+                        
+                        let reflected = (vel - 2.0 * dotVN * normal) * restitution;
+                        velX = reflected.x + (rand(seed + 2u) - 0.5) * config.bounceScatter * 2.0;
+                        velY = reflected.y + (rand(seed + 3u) - 0.5) * config.bounceScatter + config.splashUpwardBias;
+                        velZ = reflected.z + (rand(seed + 4u) - 0.5) * config.bounceScatter;
+                        
+                        state = 5.0; // BOUNCING
+                        size = size * (config.bounceSizeReduction + rand(seed + 5u) * 0.3);
+                    } else {
+                        // STICK
+                        velX = 0.0; velY = 0.0; velZ = 0.0;
+                        state = 1.0; // STUCK
+                        stickTime = 0.0;
+                    }
                 }
             }
             

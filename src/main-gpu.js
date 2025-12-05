@@ -51,11 +51,12 @@ let particles = null;
 let particlesMesh = null;
 let textBBox = null;
 
-async function initParticleSystem(textGeometry) {
+async function initParticleSystem(textGeometry, isUpdate = false) {
     console.log('Generating SDF (async)...');
     
     const loaderText = document.querySelector('.loader-text');
     const backendTypeEl = document.getElementById('backend-type');
+    const recalcStatus = document.getElementById('recalc-status');
     
     try {
         // Generate SDF in Web Worker
@@ -65,14 +66,18 @@ async function initParticleSystem(textGeometry) {
             textGeometry, 
             CONFIG.SDF_RESOLUTION,
             (progress) => {
-                if (loaderText) loaderText.textContent = `Generating collision map... ${progress}%`;
+                const statusText = `Generating collision map... ${progress}%`;
+                if (loaderText) loaderText.textContent = statusText;
+                if (isUpdate && recalcStatus) recalcStatus.textContent = statusText;
             }
         );
         
         textBBox = sdfData.bbox;
         
         // Initialize hybrid particle system (auto-selects best backend)
-        if (loaderText) loaderText.textContent = 'Initializing particle system...';
+        const initText = 'Initializing particle system...';
+        if (loaderText) loaderText.textContent = initText;
+        if (isUpdate && recalcStatus) recalcStatus.textContent = initText;
         
         particles = new HybridParticleSystem(CONFIG.MAX_PARTICLES);
         await particles.init(sdfData);
@@ -111,6 +116,14 @@ async function initParticleSystem(textGeometry) {
 }
 
 function createParticleRenderer() {
+    // Remove old particle mesh if it exists
+    if (particlesMesh) {
+        scene.remove(particlesMesh);
+        particlesMesh.geometry.dispose();
+        particlesMesh.material.dispose();
+        particlesMesh = null;
+    }
+    
     // Custom shader for rendering particles
     const particleMaterial = new THREE.ShaderMaterial({
         uniforms: {
@@ -162,7 +175,7 @@ function createParticleRenderer() {
                 if (dist > 0.5) discard;
                 
                 // Smooth edge
-                float alpha = 1.0 - smoothstep(0.3, 0.5, dist);
+                float alpha = 1.0 - smoothstep(0.35, 0.5, dist);
                 
                 // Fake sphere normal
                 vec3 normal;
@@ -174,8 +187,12 @@ function createParticleRenderer() {
                 // Water color
                 vec3 baseColor = vec3(0.6, 0.85, 1.0);
                 
-                // Fresnel
-                float fresnel = pow(1.0 - max(0.0, dot(normal, viewDir)), 3.0);
+                // Border/rim effect - darker edge for definition
+                float rimDist = smoothstep(0.25, 0.45, dist);
+                vec3 rimColor = vec3(0.2, 0.4, 0.6); // Darker blue for border
+                
+                // Fresnel - enhanced for rim lighting
+                float fresnel = pow(1.0 - max(0.0, dot(normal, viewDir)), 2.5);
                 
                 // Specular
                 vec3 lightDir = normalize(vec3(0.5, 1.0, 0.5));
@@ -186,14 +203,22 @@ function createParticleRenderer() {
                 vec3 lightDir2 = normalize(vec3(-0.3, 0.8, -0.2));
                 float spec2 = pow(max(0.0, dot(normal, normalize(viewDir + lightDir2))), 40.0);
                 
-                vec3 color = baseColor * 0.4;
+                // Base shading
+                vec3 color = baseColor * 0.5;
                 color += vec3(1.0) * spec * 1.2;
                 color += vec3(0.7, 0.85, 1.0) * spec2 * 0.5;
-                color += vec3(0.9, 0.95, 1.0) * fresnel * 0.6;
+                color += vec3(0.9, 0.95, 1.0) * fresnel * 0.7;
                 
-                // Inner highlight
-                float inner = 1.0 - dist * 1.8;
-                color += vec3(0.95, 0.98, 1.0) * inner * 0.15;
+                // Inner highlight (brighter center)
+                float inner = 1.0 - dist * 1.6;
+                color += vec3(0.95, 0.98, 1.0) * inner * 0.25;
+                
+                // Apply rim/border darkening
+                color = mix(color, rimColor, rimDist * 0.6);
+                
+                // Bright rim highlight on edge
+                float rimHighlight = smoothstep(0.35, 0.45, dist) * (1.0 - smoothstep(0.45, 0.5, dist));
+                color += vec3(0.8, 0.9, 1.0) * rimHighlight * 0.8;
                 
                 // State-based color tweak
                 if (vState > 1.5 && vState < 2.5) {
@@ -201,7 +226,8 @@ function createParticleRenderer() {
                     color *= vec3(0.95, 0.98, 1.05);
                 }
                 
-                alpha *= 0.9;
+                // Boost alpha at edges for more defined border
+                alpha = alpha * 0.95 + rimDist * 0.15;
                 
                 gl_FragColor = vec4(color, alpha);
             }
@@ -418,7 +444,7 @@ let textSettings = {
     fontWeight: 'bold',
     size: 2.8,
     height: 0.6,
-    letterSpacing: 0,
+    letterSpacing: 0.5,
     bevelEnabled: true,
     bevelSize: 0.04,
     underline: false
@@ -600,12 +626,22 @@ function createUnderline(bbox, settings) {
 async function createText(isUpdate = false) {
     const fontKey = getFontKey(textSettings.fontName, textSettings.fontWeight);
     
+    // Show recalculating overlay for updates
+    const recalcEl = document.getElementById('recalculating');
+    const recalcStatus = document.getElementById('recalc-status');
+    if (isUpdate && recalcEl) {
+        recalcEl.classList.add('visible');
+        if (recalcStatus) recalcStatus.textContent = 'Loading font...';
+    }
+    
     try {
         const font = await loadFont(fontKey);
         
         let geometry = createTextWithLetterSpacing(font, textSettings.text, textSettings);
         if (!geometry) {
             console.error('Failed to create text geometry');
+            // Hide recalculating overlay on failure
+            if (recalcEl) recalcEl.classList.remove('visible');
             return;
         }
         
@@ -634,14 +670,29 @@ async function createText(isUpdate = false) {
             particles.reset();
         }
         
+        // Update recalc status
+        if (recalcStatus) recalcStatus.textContent = 'Generating collision map...';
+        
         // Await async SDF generation (runs in Web Worker)
-        await initParticleSystem(geometry);
+        await initParticleSystem(geometry, isUpdate);
         
         // Hide loader after everything is ready
         const loaderEl = document.getElementById('loader');
         if (loaderEl) {
             loaderEl.classList.add('hidden');
             setTimeout(() => loaderEl.remove(), 500);
+        }
+        
+        // Hide recalculating overlay
+        if (recalcEl) {
+            recalcEl.classList.remove('visible');
+        }
+        
+        // Start video playback now that animation is ready
+        const videoEl = document.getElementById('video-bg');
+        if (videoEl && videoEl.paused) {
+            videoEl.currentTime = 0;
+            videoEl.play().catch(err => console.log('Video autoplay blocked:', err));
         }
     } catch (error) {
         console.error('Failed to load font:', error);
@@ -650,6 +701,10 @@ async function createText(isUpdate = false) {
         if (loaderEl) {
             loaderEl.classList.add('hidden');
             setTimeout(() => loaderEl.remove(), 500);
+        }
+        // Hide recalculating overlay on error too
+        if (recalcEl) {
+            recalcEl.classList.remove('visible');
         }
     }
 }
@@ -723,7 +778,7 @@ function setupControls() {
         textSettings.fontWeight = 'bold';
         textSettings.size = 2.8;
         textSettings.height = 0.6;
-        textSettings.letterSpacing = 0;
+        textSettings.letterSpacing = 0.5;
         textSettings.bevelEnabled = true;
         textSettings.bevelSize = 0.04;
         textSettings.underline = false;
@@ -741,12 +796,12 @@ function setupControls() {
         // Reset sliders
         document.getElementById('size-slider').value = 2.8;
         document.getElementById('size-value').textContent = '2.8';
-        document.getElementById('spacing-slider').value = 0;
-        document.getElementById('spacing-value').textContent = '0.00';
+        document.getElementById('spacing-slider').value = 0.5;
+        document.getElementById('spacing-value').textContent = '0.50';
         document.getElementById('depth-slider').value = 0.6;
         document.getElementById('depth-value').textContent = '0.6';
         document.getElementById('bevel-slider').value = 0.04;
-        document.getElementById('bevel-value').textContent = '0.0';
+        document.getElementById('bevel-value').textContent = '0.04';
         
         // Reset checkboxes
         document.getElementById('bevel-enabled').checked = true;
@@ -785,6 +840,7 @@ let lastTime = performance.now();
 let wasSpawning = false;
 let fallbackTime = 0;  // Used when no video
 let updateInProgress = false;  // For async WebGPU updates
+let lastVideoTime = 0;  // Track video time for loop detection
 
 // Check if video is available
 const hasVideo = video && video.src && video.readyState > 0;
@@ -822,13 +878,12 @@ async function animate() {
         spawnFromWave(spawnZ);
     }
     
-    // Reset particles when video loops (detect transition from end to start)
-    if (wasSpawning && !isWaveHitting && videoTime < CONFIG.VIDEO_WAVE_HIT_TIME) {
-        // Video looped or wave passed - let particles drain naturally
-        if (particles && particles.isReady() && particles.countOnText() < 100) {
-            particles.reset();
-        }
+    // Reset particles when video loops (detect time jumping backwards)
+    if (videoTime < lastVideoTime - 0.5 && particles && particles.isReady()) {
+        // Video looped - reset particles for fresh splash
+        particles.reset();
     }
+    lastVideoTime = videoTime;
     wasSpawning = isWaveHitting;
     
     // Hide wave mesh - we're using video now

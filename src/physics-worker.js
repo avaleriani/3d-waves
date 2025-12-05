@@ -87,32 +87,42 @@ function processParticles(startIdx, endIdx, dt, time) {
             
             const dist = sampleSDF(posX[i], posY[i], posZ[i]);
             
-            if (dist < 0.35) {
+            if (dist < 0.2) {
                 const normal = sdfGradient(posX[i], posY[i], posZ[i]);
-                const push = 0.15 - dist;
-                posX[i] += normal.x * push;
-                posY[i] += normal.y * push;
-                posZ[i] += normal.z * push;
                 
-                if (Math.random() < config.BOUNCE_CHANCE) {
-                    const dotVN = velX[i]*normal.x + velY[i]*normal.y + velZ[i]*normal.z;
-                    const restitution = config.BOUNCE_RESTITUTION_MIN + 
-                        Math.random() * (config.BOUNCE_RESTITUTION_MAX - config.BOUNCE_RESTITUTION_MIN);
+                // Only collide if:
+                // 1. Hitting FRONT face of text (normal pointing toward camera)
+                // 2. Particle Z is near the FRONT of the text (not deep in gaps between letters)
+                const frontThreshold = sdfBbox.maxZ - 1.5;
+                const isFrontFacing = normal.z > 0.5;
+                const isNearFront = posZ[i] > frontThreshold;
+                
+                if (isFrontFacing && isNearFront) {
+                    const push = 0.1 - dist;
+                    posX[i] += normal.x * push;
+                    posY[i] += normal.y * push;
+                    posZ[i] += normal.z * push;
                     
-                    velX[i] = (velX[i] - 2*dotVN*normal.x) * restitution;
-                    velY[i] = (velY[i] - 2*dotVN*normal.y) * restitution;
-                    velZ[i] = (velZ[i] - 2*dotVN*normal.z) * restitution;
-                    
-                    velX[i] += (Math.random() - 0.5) * config.BOUNCE_SCATTER * 2;
-                    velY[i] += (Math.random() - 0.5) * config.BOUNCE_SCATTER + config.SPLASH_UPWARD_BIAS;
-                    velZ[i] += (Math.random() - 0.5) * config.BOUNCE_SCATTER;
-                    
-                    state[i] = BOUNCING;
-                    size[i] *= config.BOUNCE_SIZE_REDUCTION + Math.random() * 0.3;
-                } else {
-                    velX[i] = velY[i] = velZ[i] = 0;
-                    state[i] = STUCK;
-                    stickTime[i] = 0;
+                    if (Math.random() < config.BOUNCE_CHANCE) {
+                        const dotVN = velX[i]*normal.x + velY[i]*normal.y + velZ[i]*normal.z;
+                        const restitution = config.BOUNCE_RESTITUTION_MIN + 
+                            Math.random() * (config.BOUNCE_RESTITUTION_MAX - config.BOUNCE_RESTITUTION_MIN);
+                        
+                        velX[i] = (velX[i] - 2*dotVN*normal.x) * restitution;
+                        velY[i] = (velY[i] - 2*dotVN*normal.y) * restitution;
+                        velZ[i] = (velZ[i] - 2*dotVN*normal.z) * restitution;
+                        
+                        velX[i] += (Math.random() - 0.5) * config.BOUNCE_SCATTER * 2;
+                        velY[i] += (Math.random() - 0.5) * config.BOUNCE_SCATTER + config.SPLASH_UPWARD_BIAS;
+                        velZ[i] += (Math.random() - 0.5) * config.BOUNCE_SCATTER;
+                        
+                        state[i] = BOUNCING;
+                        size[i] *= config.BOUNCE_SIZE_REDUCTION + Math.random() * 0.3;
+                    } else {
+                        velX[i] = velY[i] = velZ[i] = 0;
+                        state[i] = STUCK;
+                        stickTime[i] = 0;
+                    }
                 }
             }
             

@@ -347,41 +347,50 @@ export class ParticleSystem {
                 // Check collision with text surface
                 const dist = this.sampleSDF(this.posX[i], this.posY[i], this.posZ[i]);
                 
-                if (dist < 0.35) {
+                if (dist < 0.2) {
                     // IMPACT! Get surface normal
                     this.sdfGradient(this.posX[i], this.posY[i], this.posZ[i], normal);
                     
-                    // Push out of surface
-                    const push = 0.15 - dist;
-                    this.posX[i] += normal.x * push;
-                    this.posY[i] += normal.y * push;
-                    this.posZ[i] += normal.z * push;
+                    // Only collide if:
+                    // 1. Hitting FRONT face of text (normal pointing toward camera)
+                    // 2. Particle Z is near the FRONT of the text (not deep in gaps between letters)
+                    const frontThreshold = this.sdf.bbox.max.z - 1.5;
+                    const isFrontFacing = normal.z > 0.5;
+                    const isNearFront = this.posZ[i] > frontThreshold;
                     
-                    // Decide: BOUNCE or STICK?
-                    if (Math.random() < CONFIG.BOUNCE_CHANCE) {
-                        // BOUNCE - reflect off surface with energy loss
-                        const dotVN = this.velX[i]*normal.x + this.velY[i]*normal.y + this.velZ[i]*normal.z;
-                        const restitution = CONFIG.BOUNCE_RESTITUTION_MIN + 
-                            Math.random() * (CONFIG.BOUNCE_RESTITUTION_MAX - CONFIG.BOUNCE_RESTITUTION_MIN);
+                    if (isFrontFacing && isNearFront) {
+                        // Push out of surface
+                        const push = 0.1 - dist;
+                        this.posX[i] += normal.x * push;
+                        this.posY[i] += normal.y * push;
+                        this.posZ[i] += normal.z * push;
                         
-                        this.velX[i] = (this.velX[i] - 2*dotVN*normal.x) * restitution;
-                        this.velY[i] = (this.velY[i] - 2*dotVN*normal.y) * restitution;
-                        this.velZ[i] = (this.velZ[i] - 2*dotVN*normal.z) * restitution;
-                        
-                        // Add chaotic splash scatter
-                        this.velX[i] += (Math.random() - 0.5) * CONFIG.BOUNCE_SCATTER * 2;
-                        this.velY[i] += (Math.random() - 0.5) * CONFIG.BOUNCE_SCATTER + CONFIG.SPLASH_UPWARD_BIAS;
-                        this.velZ[i] += (Math.random() - 0.5) * CONFIG.BOUNCE_SCATTER;
-                        
-                        this.state[i] = BOUNCING;
-                        this.size[i] *= CONFIG.BOUNCE_SIZE_REDUCTION + Math.random() * 0.3;
-                    } else {
-                        // STICK to surface
-                        this.velX[i] = 0;
-                        this.velY[i] = 0;
-                        this.velZ[i] = 0;
-                        this.state[i] = STUCK;
-                        this.stickTime[i] = 0;
+                        // Decide: BOUNCE or STICK?
+                        if (Math.random() < CONFIG.BOUNCE_CHANCE) {
+                            // BOUNCE - reflect off surface with energy loss
+                            const dotVN = this.velX[i]*normal.x + this.velY[i]*normal.y + this.velZ[i]*normal.z;
+                            const restitution = CONFIG.BOUNCE_RESTITUTION_MIN + 
+                                Math.random() * (CONFIG.BOUNCE_RESTITUTION_MAX - CONFIG.BOUNCE_RESTITUTION_MIN);
+                            
+                            this.velX[i] = (this.velX[i] - 2*dotVN*normal.x) * restitution;
+                            this.velY[i] = (this.velY[i] - 2*dotVN*normal.y) * restitution;
+                            this.velZ[i] = (this.velZ[i] - 2*dotVN*normal.z) * restitution;
+                            
+                            // Add chaotic splash scatter
+                            this.velX[i] += (Math.random() - 0.5) * CONFIG.BOUNCE_SCATTER * 2;
+                            this.velY[i] += (Math.random() - 0.5) * CONFIG.BOUNCE_SCATTER + CONFIG.SPLASH_UPWARD_BIAS;
+                            this.velZ[i] += (Math.random() - 0.5) * CONFIG.BOUNCE_SCATTER;
+                            
+                            this.state[i] = BOUNCING;
+                            this.size[i] *= CONFIG.BOUNCE_SIZE_REDUCTION + Math.random() * 0.3;
+                        } else {
+                            // STICK to surface
+                            this.velX[i] = 0;
+                            this.velY[i] = 0;
+                            this.velZ[i] = 0;
+                            this.state[i] = STUCK;
+                            this.stickTime[i] = 0;
+                        }
                     }
                 }
                 
