@@ -40,7 +40,12 @@ const PARTICLE_SHADER = /* wgsl */`
         bounceDrag: f32,
         bounceSizeReduction: f32,
         splashUpwardBias: f32,
-        _pad2: f32,
+        bounceScatterVertical: f32,
+        
+        impactSprayFactor: f32,
+        mistSizeFactor: f32,
+        _pad2a: f32,
+        _pad2b: f32,
         
         stickDurationMin: f32,
         stickDurationMax: f32,
@@ -184,19 +189,48 @@ const PARTICLE_SHADER = /* wgsl */`
                     
                     // Decide bounce or stick
                     if (rand(seed) < config.bounceChance) {
-                        // BOUNCE
+                        // BOUNCE - natural water spray physics
                         let vel = vec3f(velX, velY, velZ);
+                        let impactSpeed = length(vel);
                         let dotVN = dot(vel, normal);
-                        let restitution = config.bounceRestitutionMin + 
-                            rand(seed + 1u) * (config.bounceRestitutionMax - config.bounceRestitutionMin);
                         
-                        let reflected = (vel - 2.0 * dotVN * normal) * restitution;
-                        velX = reflected.x + (rand(seed + 2u) - 0.5) * config.bounceScatter * 2.0;
-                        velY = reflected.y + (rand(seed + 3u) - 0.5) * config.bounceScatter + config.splashUpwardBias;
-                        velZ = reflected.z + (rand(seed + 4u) - 0.5) * config.bounceScatter;
+                        // Restitution varies with impact angle and speed
+                        let angleInfluence = abs(dotVN) / (impactSpeed + 0.01);
+                        let baseRestitution = config.bounceRestitutionMin + 
+                            rand(seed + 1u) * (config.bounceRestitutionMax - config.bounceRestitutionMin);
+                        let restitution = baseRestitution * (0.7 + 0.3 * (1.0 - angleInfluence));
+                        
+                        // Reflect with energy loss
+                        var reflected = (vel - 2.0 * dotVN * normal) * restitution;
+                        
+                        // Radial spray pattern - scatter perpendicular to impact direction
+                        let sprayAngle = rand(seed + 10u) * 6.283185; // 2*PI
+                        let sprayStrength = impactSpeed * config.impactSprayFactor;
+                        
+                        // Create tangent vectors for radial spray
+                        var tangentX = vec3f(1.0, 0.0, 0.0);
+                        if (abs(normal.x) > 0.9) { tangentX = vec3f(0.0, 1.0, 0.0); }
+                        let tangent1 = normalize(cross(normal, tangentX));
+                        let tangent2 = cross(normal, tangent1);
+                        
+                        // Apply radial spray
+                        let sprayDir = tangent1 * cos(sprayAngle) + tangent2 * sin(sprayAngle);
+                        reflected = reflected + sprayDir * sprayStrength * (0.5 + rand(seed + 11u) * 0.5);
+                        
+                        // Add scatter with more vertical emphasis (water sprays up)
+                        let hScatter = config.bounceScatter * (0.3 + rand(seed + 2u) * 0.7);
+                        let vScatter = config.bounceScatterVertical * (0.4 + rand(seed + 6u) * 0.6);
+                        
+                        velX = reflected.x + (rand(seed + 3u) - 0.5) * hScatter * 2.0;
+                        velY = reflected.y + rand(seed + 4u) * vScatter + config.splashUpwardBias;
+                        velZ = reflected.z + (rand(seed + 5u) - 0.5) * hScatter;
                         
                         state = 5.0; // BOUNCING
-                        size = size * (config.bounceSizeReduction + rand(seed + 5u) * 0.3);
+                        
+                        // Size reduction with mist variation (faster = smaller drops)
+                        let speedFactor = clamp(impactSpeed / 40.0, 0.0, 1.0);
+                        let sizeReduction = config.bounceSizeReduction - speedFactor * config.mistSizeFactor;
+                        size = size * max(sizeReduction, 0.2) * (0.6 + rand(seed + 7u) * 0.6);
                     } else {
                         // STICK
                         velX = 0.0; velY = 0.0; velZ = 0.0;
@@ -470,19 +504,25 @@ export class GPUComputeParticles {
             CONFIG.BOUNCE_RESTITUTION_MAX,
             CONFIG.BOUNCE_SCATTER,
             
-            // Row 6: More bounce + padding
+            // Row 6: More bounce config
             CONFIG.BOUNCE_DRAG,
             CONFIG.BOUNCE_SIZE_REDUCTION,
             CONFIG.SPLASH_UPWARD_BIAS,
-            0, // _pad2
+            CONFIG.BOUNCE_SCATTER_VERTICAL,
             
-            // Row 7: Stick config
+            // Row 7: Impact/mist config
+            CONFIG.IMPACT_SPRAY_FACTOR,
+            CONFIG.MIST_SIZE_FACTOR,
+            0, // _pad2a
+            0, // _pad2b
+            
+            // Row 8: Stick config
             CONFIG.STICK_DURATION_MIN,
             CONFIG.STICK_DURATION_MAX,
             CONFIG.STICK_JITTER_AMOUNT,
             CONFIG.STICK_JITTER_SPEED,
             
-            // Row 8: Drip config
+            // Row 9: Drip config
             CONFIG.DRIP_INITIAL_VELOCITY,
             CONFIG.DRIP_SHRINK_RATE,
             CONFIG.DRIP_REMOVE_Y,

@@ -1,9 +1,13 @@
 import * as THREE from 'three';
 import { FontLoader } from 'three/examples/jsm/loaders/FontLoader.js';
 import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js';
-import { ParticleSystem, generateSDFAsync, generateSDF } from './gpu-particles.js';
+import { ParticleSystem, generateSDFAsync, generateSDF, getLastSDFBackend } from './gpu-particles.js';
 import { HybridParticleSystem, BACKEND } from './particle-system.js';
+import { generateCacheKey, getCachedSDF, cacheSDF, pruneCache } from './sdf-cache.js';
 import * as CONFIG from './config.js';
+
+// Current text settings reference for caching
+let currentCacheKey = null;
 
 // ============================================
 // SCENE SETUP
@@ -51,26 +55,75 @@ let particles = null;
 let particlesMesh = null;
 let textBBox = null;
 
-async function initParticleSystem(textGeometry, isUpdate = false) {
-    console.log('Generating SDF (async)...');
+async function initParticleSystem(textGeometry, isUpdate = false, cacheKey = null) {
+    console.log('Initializing particle system...');
     
     const loaderText = document.querySelector('.loader-text');
     const backendTypeEl = document.getElementById('backend-type');
     const recalcStatus = document.getElementById('recalc-status');
     
     try {
-        // Generate SDF in Web Worker
-        if (loaderText) loaderText.textContent = 'Generating collision map...';
+        let sdfData = null;
         
-        const sdfData = await generateSDFAsync(
-            textGeometry, 
-            CONFIG.SDF_RESOLUTION,
-            (progress) => {
-                const statusText = `Generating collision map... ${progress}%`;
-                if (loaderText) loaderText.textContent = statusText;
-                if (isUpdate && recalcStatus) recalcStatus.textContent = statusText;
+        // Try to load from cache first
+        if (cacheKey) {
+            const loadingText = 'Checking cache...';
+            if (loaderText) loaderText.textContent = loadingText;
+            if (isUpdate && recalcStatus) recalcStatus.textContent = loadingText;
+            
+            sdfData = await getCachedSDF(cacheKey);
+            
+            if (sdfData) {
+                // Validate cached data
+                const data = sdfData.data;
+                let isValid = data && data.length > 0;
+                
+                if (isValid) {
+                    // Quick validation: check for reasonable distance values
+                    let minVal = Infinity, maxVal = -Infinity;
+                    const step = Math.max(1, Math.floor(data.length / 100));
+                    for (let i = 0; i < data.length; i += step) {
+                        if (data[i] < minVal) minVal = data[i];
+                        if (data[i] > maxVal) maxVal = data[i];
+                    }
+                    isValid = (maxVal - minVal) > 0.01 && minVal < 1.0;
+                    console.log(`Cache validation: min=${minVal.toFixed(3)}, max=${maxVal.toFixed(3)}, valid=${isValid}`);
+                }
+                
+                if (isValid) {
+                    // Reconstruct THREE.js Box3 from cached data
+                    sdfData.bbox = new THREE.Box3(
+                        new THREE.Vector3(sdfData.bbox.min.x, sdfData.bbox.min.y, sdfData.bbox.min.z),
+                        new THREE.Vector3(sdfData.bbox.max.x, sdfData.bbox.max.y, sdfData.bbox.max.z)
+                    );
+                    console.log('✓ SDF loaded from cache (instant!)');
+                } else {
+                    console.warn('Cached SDF invalid, regenerating...');
+                    sdfData = null; // Force regeneration
+                }
             }
-        );
+        }
+        
+        // Generate SDF if not cached
+        if (!sdfData) {
+            if (loaderText) loaderText.textContent = 'Generating collision map...';
+            
+            sdfData = await generateSDFAsync(
+                textGeometry, 
+                CONFIG.SDF_RESOLUTION,
+                (progress) => {
+                    const statusText = `Generating collision map... ${progress}%`;
+                    if (loaderText) loaderText.textContent = statusText;
+                    if (isUpdate && recalcStatus) recalcStatus.textContent = statusText;
+                }
+            );
+            
+            // Cache the result for next time
+            if (cacheKey) {
+                cacheSDF(cacheKey, sdfData).catch(err => console.warn('Cache save failed:', err));
+                pruneCache(10); // Keep last 10 cached SDFs
+            }
+        }
         
         textBBox = sdfData.bbox;
         
@@ -98,7 +151,8 @@ async function initParticleSystem(textGeometry, isUpdate = false) {
         createParticleRenderer();
         
         console.log('Particle System ready:', CONFIG.MAX_PARTICLES.toLocaleString(), 'max particles');
-        console.log('Backend:', particles.getBackendType());
+        console.log('Particle Backend:', particles.getBackendType());
+        console.log('SDF Backend:', getLastSDFBackend());
         
     } catch (err) {
         console.warn('Async SDF failed, falling back to sync:', err);
@@ -670,11 +724,14 @@ async function createText(isUpdate = false) {
             particles.reset();
         }
         
-        // Update recalc status
-        if (recalcStatus) recalcStatus.textContent = 'Generating collision map...';
+        // Generate cache key for this text configuration
+        currentCacheKey = generateCacheKey(textSettings.text, textSettings);
         
-        // Await async SDF generation (runs in Web Worker)
-        await initParticleSystem(geometry, isUpdate);
+        // Update recalc status
+        if (recalcStatus) recalcStatus.textContent = 'Checking cache...';
+        
+        // Await async SDF generation (or load from cache)
+        await initParticleSystem(geometry, isUpdate, currentCacheKey);
         
         // Hide loader after everything is ready
         const loaderEl = document.getElementById('loader');
@@ -918,6 +975,10 @@ window.addEventListener('resize', () => {
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
 });
+
+// Preload default font immediately (non-blocking)
+const defaultFontKey = getFontKey(textSettings.fontName, textSettings.fontWeight);
+loadFont(defaultFontKey).catch(() => {}); // Start loading, ignore errors here
 
 setupControls();
 createText();

@@ -104,20 +104,60 @@ function processParticles(startIdx, endIdx, dt, time) {
                     posZ[i] += normal.z * push;
                     
                     if (Math.random() < config.BOUNCE_CHANCE) {
-                        const dotVN = velX[i]*normal.x + velY[i]*normal.y + velZ[i]*normal.z;
-                        const restitution = config.BOUNCE_RESTITUTION_MIN + 
+                        // BOUNCE - natural water spray physics
+                        const vx = velX[i], vy = velY[i], vz = velZ[i];
+                        const impactSpeed = Math.sqrt(vx*vx + vy*vy + vz*vz);
+                        const dotVN = vx*normal.x + vy*normal.y + vz*normal.z;
+                        
+                        // Restitution varies with impact angle and speed
+                        const angleInfluence = Math.abs(dotVN) / (impactSpeed + 0.01);
+                        const baseRestitution = config.BOUNCE_RESTITUTION_MIN + 
                             Math.random() * (config.BOUNCE_RESTITUTION_MAX - config.BOUNCE_RESTITUTION_MIN);
+                        const restitution = baseRestitution * (0.7 + 0.3 * (1 - angleInfluence));
                         
-                        velX[i] = (velX[i] - 2*dotVN*normal.x) * restitution;
-                        velY[i] = (velY[i] - 2*dotVN*normal.y) * restitution;
-                        velZ[i] = (velZ[i] - 2*dotVN*normal.z) * restitution;
+                        // Reflect with energy loss
+                        let reflX = (vx - 2*dotVN*normal.x) * restitution;
+                        let reflY = (vy - 2*dotVN*normal.y) * restitution;
+                        let reflZ = (vz - 2*dotVN*normal.z) * restitution;
                         
-                        velX[i] += (Math.random() - 0.5) * config.BOUNCE_SCATTER * 2;
-                        velY[i] += (Math.random() - 0.5) * config.BOUNCE_SCATTER + config.SPLASH_UPWARD_BIAS;
-                        velZ[i] += (Math.random() - 0.5) * config.BOUNCE_SCATTER;
+                        // Radial spray pattern
+                        const sprayAngle = Math.random() * Math.PI * 2;
+                        const sprayFactor = config.IMPACT_SPRAY_FACTOR || 0.12;
+                        const sprayStrength = impactSpeed * sprayFactor;
+                        
+                        // Create tangent vectors for radial spray
+                        let tangentX = 1, tangentY = 0, tangentZ = 0;
+                        if (Math.abs(normal.x) > 0.9) { tangentX = 0; tangentY = 1; }
+                        const t1x = normal.y*tangentZ - normal.z*tangentY;
+                        const t1y = normal.z*tangentX - normal.x*tangentZ;
+                        const t1z = normal.x*tangentY - normal.y*tangentX;
+                        const t1len = Math.sqrt(t1x*t1x + t1y*t1y + t1z*t1z) || 1;
+                        const nt1x = t1x/t1len, nt1y = t1y/t1len, nt1z = t1z/t1len;
+                        const t2x = normal.y*nt1z - normal.z*nt1y;
+                        const t2y = normal.z*nt1x - normal.x*nt1z;
+                        const t2z = normal.x*nt1y - normal.y*nt1x;
+                        
+                        // Apply radial spray
+                        const sprayMult = sprayStrength * (0.5 + Math.random() * 0.5);
+                        reflX += (nt1x * Math.cos(sprayAngle) + t2x * Math.sin(sprayAngle)) * sprayMult;
+                        reflY += (nt1y * Math.cos(sprayAngle) + t2y * Math.sin(sprayAngle)) * sprayMult;
+                        reflZ += (nt1z * Math.cos(sprayAngle) + t2z * Math.sin(sprayAngle)) * sprayMult;
+                        
+                        // Add scatter with more vertical emphasis
+                        const hScatter = config.BOUNCE_SCATTER * (0.3 + Math.random() * 0.7);
+                        const vScatter = (config.BOUNCE_SCATTER_VERTICAL || 6) * (0.4 + Math.random() * 0.6);
+                        
+                        velX[i] = reflX + (Math.random() - 0.5) * hScatter * 2;
+                        velY[i] = reflY + Math.random() * vScatter + config.SPLASH_UPWARD_BIAS;
+                        velZ[i] = reflZ + (Math.random() - 0.5) * hScatter;
                         
                         state[i] = BOUNCING;
-                        size[i] *= config.BOUNCE_SIZE_REDUCTION + Math.random() * 0.3;
+                        
+                        // Size reduction with mist variation
+                        const speedFactor = Math.min(impactSpeed / 40, 1);
+                        const mistFactor = config.MIST_SIZE_FACTOR || 0.3;
+                        const sizeReduction = Math.max(config.BOUNCE_SIZE_REDUCTION - speedFactor * mistFactor, 0.2);
+                        size[i] *= sizeReduction * (0.6 + Math.random() * 0.6);
                     } else {
                         velX[i] = velY[i] = velZ[i] = 0;
                         state[i] = STUCK;

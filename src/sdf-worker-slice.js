@@ -1,11 +1,10 @@
 /**
- * Web Worker for SDF Generation
- * Uses BVH acceleration for fast triangle lookups
- * Runs heavy computation off the main thread
+ * Worker for parallel SDF generation - processes a slice of Z layers
+ * Uses BVH for fast triangle lookups
  */
 
 // ============================================
-// BVH (Bounding Volume Hierarchy) for O(log n) triangle lookup
+// BVH (Bounding Volume Hierarchy)
 // ============================================
 class BVHNode {
     constructor() {
@@ -13,14 +12,13 @@ class BVHNode {
         this.maxX = -Infinity; this.maxY = -Infinity; this.maxZ = -Infinity;
         this.left = null;
         this.right = null;
-        this.triangles = null; // Leaf nodes store triangles
+        this.triangles = null;
     }
 }
 
 function buildBVH(triangles, depth = 0, maxDepth = 12, minTris = 4) {
     const node = new BVHNode();
     
-    // Compute bounding box for all triangles
     for (const tri of triangles) {
         node.minX = Math.min(node.minX, tri.ax, tri.bx, tri.cx);
         node.minY = Math.min(node.minY, tri.ay, tri.by, tri.cy);
@@ -30,30 +28,24 @@ function buildBVH(triangles, depth = 0, maxDepth = 12, minTris = 4) {
         node.maxZ = Math.max(node.maxZ, tri.az, tri.bz, tri.cz);
     }
     
-    // Leaf node if few triangles or max depth reached
     if (triangles.length <= minTris || depth >= maxDepth) {
         node.triangles = triangles;
         return node;
     }
     
-    // Find longest axis to split
     const sizeX = node.maxX - node.minX;
     const sizeY = node.maxY - node.minY;
     const sizeZ = node.maxZ - node.minZ;
     
-    let axis, getCoord;
+    let getCoord;
     if (sizeX >= sizeY && sizeX >= sizeZ) {
-        axis = 'x';
         getCoord = t => (t.ax + t.bx + t.cx) / 3;
     } else if (sizeY >= sizeZ) {
-        axis = 'y';
         getCoord = t => (t.ay + t.by + t.cy) / 3;
     } else {
-        axis = 'z';
         getCoord = t => (t.az + t.bz + t.cz) / 3;
     }
     
-    // Sort and split at median
     triangles.sort((a, b) => getCoord(a) - getCoord(b));
     const mid = Math.floor(triangles.length / 2);
     
@@ -70,7 +62,6 @@ function buildBVH(triangles, depth = 0, maxDepth = 12, minTris = 4) {
     return node;
 }
 
-// Distance from point to AABB (for BVH traversal)
 function pointToAABBDist(px, py, pz, node) {
     let dx = 0, dy = 0, dz = 0;
     
@@ -86,15 +77,12 @@ function pointToAABBDist(px, py, pz, node) {
     return Math.sqrt(dx*dx + dy*dy + dz*dz);
 }
 
-// Find minimum distance using BVH
 function queryBVH(node, px, py, pz, bestDist) {
     if (!node) return bestDist;
     
-    // Skip if AABB is further than current best
     const aabbDist = pointToAABBDist(px, py, pz, node);
     if (aabbDist >= bestDist) return bestDist;
     
-    // Leaf node - check all triangles
     if (node.triangles) {
         for (const tri of node.triangles) {
             const d = pointToTriangleDist(px, py, pz, tri);
@@ -103,7 +91,6 @@ function queryBVH(node, px, py, pz, bestDist) {
         return bestDist;
     }
     
-    // Interior node - traverse children (closer child first)
     const leftDist = node.left ? pointToAABBDist(px, py, pz, node.left) : Infinity;
     const rightDist = node.right ? pointToAABBDist(px, py, pz, node.right) : Infinity;
     
@@ -189,68 +176,43 @@ function pointToTriangleDist(px, py, pz, tri) {
     return Math.sqrt(dx*dx + dy*dy + dz*dz);
 }
 
-function generateSDF(triangles, bbox, resolution) {
-    const size = {
-        x: bbox.max.x - bbox.min.x,
-        y: bbox.max.y - bbox.min.y,
-        z: bbox.max.z - bbox.min.z
-    };
+// ============================================
+// Worker message handler
+// ============================================
+self.onmessage = function(e) {
+    const { triangles, bbox, resolution, zStart, zEnd, stepX, stepY, stepZ } = e.data;
     
-    // Build BVH for O(log n) triangle lookups
-    console.log(`Building BVH for ${triangles.length} triangles...`);
-    const bvhStart = performance.now();
-    const bvh = buildBVH([...triangles]); // Copy array since buildBVH sorts
-    console.log(`BVH built in ${(performance.now() - bvhStart).toFixed(0)}ms`);
+    // Build BVH for this worker
+    const bvh = buildBVH([...triangles]);
     
-    const data = new Float32Array(resolution * resolution * resolution);
-    const stepX = size.x / resolution;
-    const stepY = size.y / resolution;
-    const stepZ = size.z / resolution;
+    const sliceCount = zEnd - zStart;
+    const sliceSize = resolution * resolution;
+    const data = new Float32Array(sliceCount * sliceSize);
     
-    let lastProgress = 0;
-    
-    // Process Z slices for progress reporting
-    for (let z = 0; z < resolution; z++) {
+    for (let z = zStart; z < zEnd; z++) {
         const pz = bbox.min.z + (z + 0.5) * stepZ;
+        const zOffset = (z - zStart) * sliceSize;
         
         for (let y = 0; y < resolution; y++) {
             const py = bbox.min.y + (y + 0.5) * stepY;
+            const yOffset = y * resolution;
             
             for (let x = 0; x < resolution; x++) {
                 const px = bbox.min.x + (x + 0.5) * stepX;
-                
-                // Use BVH for fast distance query
                 const minDist = queryBVH(bvh, px, py, pz, Infinity);
-                data[x + y * resolution + z * resolution * resolution] = minDist;
+                data[zOffset + yOffset + x] = minDist;
             }
         }
         
-        // Report progress per Z slice
-        const progress = Math.floor(((z + 1) / resolution) * 100);
-        if (progress >= lastProgress + 5) {
-            lastProgress = progress;
-            self.postMessage({ type: 'progress', progress });
-        }
+        // Report progress for each Z slice
+        self.postMessage({ type: 'progress', z });
     }
     
-    return { data, size, stepX, stepY, stepZ };
-}
-
-// Handle messages from main thread
-self.onmessage = function(e) {
-    const { triangles, bbox, resolution } = e.data;
-    
-    const startTime = performance.now();
-    const result = generateSDF(triangles, bbox, resolution);
-    const duration = performance.now() - startTime;
-    
+    // Send result back
     self.postMessage({
         type: 'complete',
-        data: result.data,
-        size: result.size,
-        stepX: result.stepX,
-        stepY: result.stepY,
-        stepZ: result.stepZ,
-        duration
-    }, [result.data.buffer]); // Transfer buffer for zero-copy
+        data,
+        zStart,
+        zEnd
+    }, [data.buffer]);
 };

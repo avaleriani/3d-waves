@@ -5,6 +5,8 @@
  */
 
 import * as CONFIG from './config.js';
+import { generateSDFWebGPU, isWebGPUSDFAvailable } from './sdf-gpu.js';
+import { generateSDFParallel } from './sdf-parallel.js';
 
 // Particle States
 const FALLING = 0;   // Invisible, flying toward text
@@ -13,6 +15,10 @@ const SLIDING = 2;   // Sliding down letter
 const DRIPPING = 3;  // Falling off letter
 const INACTIVE = 4;  // Dead/unused
 const BOUNCING = 5;  // Bounced off on impact
+
+// Track which SDF backend was used
+let lastSDFBackend = 'unknown';
+export function getLastSDFBackend() { return lastSDFBackend; }
 
 // Extract triangle data from geometry (runs on main thread)
 export function extractTriangles(geometry) {
@@ -36,22 +42,109 @@ export function extractTriangles(geometry) {
     return triangles;
 }
 
-// Generate SDF using Web Worker (non-blocking)
-export function generateSDFAsync(geometry, resolution = 64, onProgress) {
+/**
+ * Validate SDF data to ensure it's usable
+ */
+function validateSDF(result, triangleCount) {
+    if (!result || !result.data) {
+        console.error('SDF validation failed: no data');
+        return false;
+    }
+    
+    const data = result.data;
+    const total = data.length;
+    
+    // Check for all zeros or all same value (broken)
+    let minVal = Infinity, maxVal = -Infinity;
+    let zeroCount = 0;
+    const sampleSize = Math.min(1000, total);
+    const step = Math.floor(total / sampleSize);
+    
+    for (let i = 0; i < total; i += step) {
+        const v = data[i];
+        if (v === 0) zeroCount++;
+        if (v < minVal) minVal = v;
+        if (v > maxVal) maxVal = v;
+    }
+    
+    const range = maxVal - minVal;
+    console.log(`SDF validation: min=${minVal.toFixed(3)}, max=${maxVal.toFixed(3)}, range=${range.toFixed(3)}`);
+    
+    // SDF should have a reasonable range (not all zeros, not all same value)
+    if (range < 0.01) {
+        console.error('SDF validation failed: no variation in distance values');
+        return false;
+    }
+    
+    // Should have some small values (near surface)
+    if (minVal > 1.0) {
+        console.error('SDF validation failed: no values near surface');
+        return false;
+    }
+    
+    return true;
+}
+
+/**
+ * Generate SDF with automatic backend selection
+ * Priority: WebGPU > Multi-Worker > Single Worker
+ */
+export async function generateSDFAsync(geometry, resolution = 64, onProgress) {
+    const bbox = geometry.boundingBox.clone();
+    bbox.expandByScalar(0.8);
+    
+    const triangles = extractTriangles(geometry);
+    console.log(`Generating SDF: ${resolution}³ voxels, ${triangles.length} triangles`);
+    
+    // Try WebGPU first (fastest)
+    if (await isWebGPUSDFAvailable()) {
+        try {
+            console.log('Using WebGPU for SDF generation...');
+            const result = await generateSDFWebGPU(triangles, bbox, resolution, onProgress);
+            if (result && validateSDF(result, triangles.length)) {
+                lastSDFBackend = 'WebGPU';
+                return result;
+            }
+            console.warn('WebGPU SDF validation failed, trying parallel...');
+        } catch (err) {
+            console.warn('WebGPU SDF failed, falling back:', err);
+        }
+    }
+    
+    // Try multi-worker parallel (fast)
+    try {
+        console.log('Using parallel workers for SDF generation...');
+        const result = await generateSDFParallel(triangles, bbox, resolution, onProgress);
+        if (result && validateSDF(result, triangles.length)) {
+            lastSDFBackend = 'Multi-Worker';
+            return result;
+        }
+        console.warn('Parallel SDF validation failed, trying single worker...');
+    } catch (err) {
+        console.warn('Parallel SDF failed, falling back to single worker:', err);
+    }
+    
+    // Fall back to single worker (proven to work)
+    console.log('Using single worker for SDF generation...');
+    lastSDFBackend = 'Single-Worker';
+    return generateSDFSingleWorker(geometry, resolution, onProgress);
+}
+
+// Single worker fallback
+function generateSDFSingleWorker(geometry, resolution, onProgress) {
     return new Promise((resolve, reject) => {
         const bbox = geometry.boundingBox.clone();
         bbox.expandByScalar(0.8);
         
         const triangles = extractTriangles(geometry);
         
-        // Create worker (classic worker, not module)
         const worker = new Worker(new URL('./sdf-worker.js', import.meta.url));
         
         worker.onmessage = (e) => {
             if (e.data.type === 'progress') {
                 if (onProgress) onProgress(e.data.progress);
             } else if (e.data.type === 'complete') {
-                console.log(`SDF Generation: ${e.data.duration.toFixed(0)}ms (worker)`);
+                console.log(`SDF Generation: ${e.data.duration.toFixed(0)}ms (single worker)`);
                 
                 resolve({
                     data: e.data.data,
@@ -73,7 +166,6 @@ export function generateSDFAsync(geometry, resolution = 64, onProgress) {
             worker.terminate();
         };
         
-        // Send data to worker
         worker.postMessage({
             triangles,
             bbox: { min: { x: bbox.min.x, y: bbox.min.y, z: bbox.min.z },
@@ -367,22 +459,63 @@ export class ParticleSystem {
                         
                         // Decide: BOUNCE or STICK?
                         if (Math.random() < CONFIG.BOUNCE_CHANCE) {
-                            // BOUNCE - reflect off surface with energy loss
-                            const dotVN = this.velX[i]*normal.x + this.velY[i]*normal.y + this.velZ[i]*normal.z;
-                            const restitution = CONFIG.BOUNCE_RESTITUTION_MIN + 
+                            // BOUNCE - natural water spray physics
+                            const vx = this.velX[i], vy = this.velY[i], vz = this.velZ[i];
+                            const impactSpeed = Math.sqrt(vx*vx + vy*vy + vz*vz);
+                            const dotVN = vx*normal.x + vy*normal.y + vz*normal.z;
+                            
+                            // Restitution varies with impact angle and speed
+                            const angleInfluence = Math.abs(dotVN) / (impactSpeed + 0.01);
+                            const baseRestitution = CONFIG.BOUNCE_RESTITUTION_MIN + 
                                 Math.random() * (CONFIG.BOUNCE_RESTITUTION_MAX - CONFIG.BOUNCE_RESTITUTION_MIN);
+                            const restitution = baseRestitution * (0.7 + 0.3 * (1 - angleInfluence));
                             
-                            this.velX[i] = (this.velX[i] - 2*dotVN*normal.x) * restitution;
-                            this.velY[i] = (this.velY[i] - 2*dotVN*normal.y) * restitution;
-                            this.velZ[i] = (this.velZ[i] - 2*dotVN*normal.z) * restitution;
+                            // Reflect with energy loss
+                            let reflX = (vx - 2*dotVN*normal.x) * restitution;
+                            let reflY = (vy - 2*dotVN*normal.y) * restitution;
+                            let reflZ = (vz - 2*dotVN*normal.z) * restitution;
                             
-                            // Add chaotic splash scatter
-                            this.velX[i] += (Math.random() - 0.5) * CONFIG.BOUNCE_SCATTER * 2;
-                            this.velY[i] += (Math.random() - 0.5) * CONFIG.BOUNCE_SCATTER + CONFIG.SPLASH_UPWARD_BIAS;
-                            this.velZ[i] += (Math.random() - 0.5) * CONFIG.BOUNCE_SCATTER;
+                            // Radial spray pattern - scatter perpendicular to impact
+                            const sprayAngle = Math.random() * Math.PI * 2;
+                            const sprayStrength = impactSpeed * (CONFIG.IMPACT_SPRAY_FACTOR || 0.12);
+                            
+                            // Create tangent vectors for radial spray
+                            let tangentX = 1, tangentY = 0, tangentZ = 0;
+                            if (Math.abs(normal.x) > 0.9) { tangentX = 0; tangentY = 1; }
+                            // Cross product: tangent1 = normal x tangentVec
+                            const t1x = normal.y*tangentZ - normal.z*tangentY;
+                            const t1y = normal.z*tangentX - normal.x*tangentZ;
+                            const t1z = normal.x*tangentY - normal.y*tangentX;
+                            const t1len = Math.sqrt(t1x*t1x + t1y*t1y + t1z*t1z) || 1;
+                            const nt1x = t1x/t1len, nt1y = t1y/t1len, nt1z = t1z/t1len;
+                            // tangent2 = normal x tangent1
+                            const t2x = normal.y*nt1z - normal.z*nt1y;
+                            const t2y = normal.z*nt1x - normal.x*nt1z;
+                            const t2z = normal.x*nt1y - normal.y*nt1x;
+                            
+                            // Apply radial spray
+                            const sprayMult = sprayStrength * (0.5 + Math.random() * 0.5);
+                            const sprayX = (nt1x * Math.cos(sprayAngle) + t2x * Math.sin(sprayAngle)) * sprayMult;
+                            const sprayY = (nt1y * Math.cos(sprayAngle) + t2y * Math.sin(sprayAngle)) * sprayMult;
+                            const sprayZ = (nt1z * Math.cos(sprayAngle) + t2z * Math.sin(sprayAngle)) * sprayMult;
+                            
+                            reflX += sprayX; reflY += sprayY; reflZ += sprayZ;
+                            
+                            // Add scatter with more vertical emphasis
+                            const hScatter = CONFIG.BOUNCE_SCATTER * (0.3 + Math.random() * 0.7);
+                            const vScatter = (CONFIG.BOUNCE_SCATTER_VERTICAL || 6) * (0.4 + Math.random() * 0.6);
+                            
+                            this.velX[i] = reflX + (Math.random() - 0.5) * hScatter * 2;
+                            this.velY[i] = reflY + Math.random() * vScatter + CONFIG.SPLASH_UPWARD_BIAS;
+                            this.velZ[i] = reflZ + (Math.random() - 0.5) * hScatter;
                             
                             this.state[i] = BOUNCING;
-                            this.size[i] *= CONFIG.BOUNCE_SIZE_REDUCTION + Math.random() * 0.3;
+                            
+                            // Size reduction with mist variation
+                            const speedFactor = Math.min(impactSpeed / 40, 1);
+                            const mistFactor = CONFIG.MIST_SIZE_FACTOR || 0.3;
+                            const sizeReduction = Math.max(CONFIG.BOUNCE_SIZE_REDUCTION - speedFactor * mistFactor, 0.2);
+                            this.size[i] *= sizeReduction * (0.6 + Math.random() * 0.6);
                         } else {
                             // STICK to surface
                             this.velX[i] = 0;
