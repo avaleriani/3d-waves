@@ -178,17 +178,29 @@ function createParticleRenderer() {
         particlesMesh = null;
     }
     
-    // Custom shader for rendering particles
+    // Custom shader for rendering particles with configurable visuals
     const particleMaterial = new THREE.ShaderMaterial({
         uniforms: {
-            time: { value: 0 }
+            time: { value: 0 },
+            waterColor: { value: new THREE.Vector3(...CONFIG.WATER_COLOR) },
+            waterOpacity: { value: CONFIG.WATER_OPACITY },
+            fresnelStrength: { value: CONFIG.FRESNEL_STRENGTH },
+            specularIntensity: { value: CONFIG.SPECULAR_INTENSITY },
+            depthFade: { value: CONFIG.DEPTH_FADE ? 1.0 : 0.0 },
+            depthFadeDistance: { value: CONFIG.DEPTH_FADE_DISTANCE },
+            sizeAttenuation: { value: CONFIG.SIZE_ATTENUATION ? 1.0 : 0.0 }
         },
         vertexShader: `
             attribute vec4 state; // state, stickTime, size, slideSpeed
             
+            uniform float sizeAttenuation;
+            uniform float depthFade;
+            uniform float depthFadeDistance;
+            
             varying float vSize;
             varying float vState;
             varying vec3 vViewPos;
+            varying float vDepthFade;
             
             void main() {
                 vState = state.x;
@@ -206,82 +218,110 @@ function createParticleRenderer() {
                 vViewPos = -mvPos.xyz;
                 gl_Position = projectionMatrix * mvPos;
                 
-                // Size attenuation
                 float dist = length(mvPos.xyz);
-                gl_PointSize = vSize * (350.0 / dist);
-                gl_PointSize = clamp(gl_PointSize, 1.0, 50.0);
+                
+                // Configurable size attenuation
+                if (sizeAttenuation > 0.5) {
+                    gl_PointSize = vSize * (400.0 / dist);
+                } else {
+                    gl_PointSize = vSize * 25.0;
+                }
+                gl_PointSize = clamp(gl_PointSize, 1.0, 64.0);
+                
+                // Depth fade factor
+                vDepthFade = depthFade > 0.5 ? clamp(1.0 - (dist - depthFadeDistance) / depthFadeDistance, 0.3, 1.0) : 1.0;
             }
         `,
         fragmentShader: `
             uniform float time;
+            uniform vec3 waterColor;
+            uniform float waterOpacity;
+            uniform float fresnelStrength;
+            uniform float specularIntensity;
             
             varying float vSize;
             varying float vState;
             varying vec3 vViewPos;
+            varying float vDepthFade;
             
             void main() {
-                // Only render STUCK, SLIDING, DRIPPING, BOUNCING
+                // Only render visible particles
                 if (vState < 0.5 || (vState > 3.5 && vState < 4.5) || vSize < 0.01) discard;
                 
-                // Circular shape
+                // Circular shape with smooth edge
                 vec2 center = gl_PointCoord - 0.5;
                 float dist = length(center);
                 if (dist > 0.5) discard;
                 
-                // Smooth edge
-                float alpha = 1.0 - smoothstep(0.35, 0.5, dist);
+                // Smooth alpha falloff
+                float alpha = 1.0 - smoothstep(0.3, 0.5, dist);
                 
-                // Fake sphere normal
+                // Fake sphere normal for lighting
                 vec3 normal;
                 normal.xy = center * 2.0;
                 normal.z = sqrt(max(0.0, 1.0 - dot(normal.xy, normal.xy)));
                 
                 vec3 viewDir = normalize(vViewPos);
                 
-                // Water color
-                vec3 baseColor = vec3(0.6, 0.85, 1.0);
+                // Base water color (slightly brighter version)
+                vec3 baseColor = waterColor * 1.3;
                 
-                // Border/rim effect - darker edge for definition
-                float rimDist = smoothstep(0.25, 0.45, dist);
-                vec3 rimColor = vec3(0.2, 0.4, 0.6); // Darker blue for border
+                // Darker rim for definition
+                float rimDist = smoothstep(0.2, 0.45, dist);
+                vec3 rimColor = waterColor * 0.4;
                 
-                // Fresnel - enhanced for rim lighting
+                // Fresnel effect - edge glow
                 float fresnel = pow(1.0 - max(0.0, dot(normal, viewDir)), 2.5);
                 
-                // Specular
+                // Main specular highlight (key light)
                 vec3 lightDir = normalize(vec3(0.5, 1.0, 0.5));
                 vec3 halfVec = normalize(viewDir + lightDir);
                 float spec = pow(max(0.0, dot(normal, halfVec)), 80.0);
                 
-                // Second light
-                vec3 lightDir2 = normalize(vec3(-0.3, 0.8, -0.2));
-                float spec2 = pow(max(0.0, dot(normal, normalize(viewDir + lightDir2))), 40.0);
+                // Secondary specular (fill light)
+                vec3 lightDir2 = normalize(vec3(-0.4, 0.7, -0.3));
+                float spec2 = pow(max(0.0, dot(normal, normalize(viewDir + lightDir2))), 50.0);
                 
-                // Base shading
-                vec3 color = baseColor * 0.5;
-                color += vec3(1.0) * spec * 1.2;
-                color += vec3(0.7, 0.85, 1.0) * spec2 * 0.5;
-                color += vec3(0.9, 0.95, 1.0) * fresnel * 0.7;
+                // Third light (rim/back light)
+                vec3 lightDir3 = normalize(vec3(0.0, 0.2, -1.0));
+                float spec3 = pow(max(0.0, dot(normal, normalize(viewDir + lightDir3))), 30.0);
                 
-                // Inner highlight (brighter center)
-                float inner = 1.0 - dist * 1.6;
-                color += vec3(0.95, 0.98, 1.0) * inner * 0.25;
+                // Build final color
+                vec3 color = baseColor * 0.4; // Ambient
+                color += vec3(1.0) * spec * specularIntensity * 1.5; // Key light
+                color += vec3(0.7, 0.85, 1.0) * spec2 * specularIntensity * 0.6; // Fill light
+                color += waterColor * 1.5 * spec3 * specularIntensity * 0.4; // Rim light
+                color += vec3(0.9, 0.95, 1.0) * fresnel * fresnelStrength; // Fresnel glow
                 
-                // Apply rim/border darkening
-                color = mix(color, rimColor, rimDist * 0.6);
+                // Inner highlight (caustic-like bright center)
+                float inner = max(0.0, 1.0 - dist * 2.0);
+                color += vec3(1.0, 1.0, 1.0) * inner * inner * 0.4;
                 
-                // Bright rim highlight on edge
-                float rimHighlight = smoothstep(0.35, 0.45, dist) * (1.0 - smoothstep(0.45, 0.5, dist));
-                color += vec3(0.8, 0.9, 1.0) * rimHighlight * 0.8;
+                // Apply rim darkening for droplet definition
+                color = mix(color, rimColor, rimDist * 0.5);
                 
-                // State-based color tweak
-                if (vState > 1.5 && vState < 2.5) {
-                    // Sliding - slightly more blue
-                    color *= vec3(0.95, 0.98, 1.05);
+                // Bright edge highlight
+                float rimHighlight = smoothstep(0.32, 0.42, dist) * (1.0 - smoothstep(0.42, 0.5, dist));
+                color += vec3(0.9, 0.95, 1.0) * rimHighlight * 0.9;
+                
+                // State-based color variations
+                if (vState > 4.5) {
+                    // BOUNCING (5) - more energetic, slightly brighter
+                    color *= 1.1;
+                    color += vec3(0.1, 0.15, 0.2) * fresnel;
+                } else if (vState > 2.5 && vState < 3.5) {
+                    // DRIPPING (3) - slightly darker, falling
+                    color *= 0.95;
+                } else if (vState > 1.5 && vState < 2.5) {
+                    // SLIDING (2) - wet streak look
+                    color *= vec3(0.95, 0.97, 1.02);
                 }
                 
-                // Boost alpha at edges for more defined border
-                alpha = alpha * 0.95 + rimDist * 0.15;
+                // Final alpha with depth fade
+                alpha *= waterOpacity * vDepthFade;
+                
+                // Slight alpha boost at edges for definition
+                alpha = alpha * 0.9 + rimHighlight * 0.2;
                 
                 gl_FragColor = vec4(color, alpha);
             }
@@ -321,30 +361,38 @@ function syncParticleBuffers() {
 }
 
 // ============================================
-// WAVE SPAWNING
+// WAVE SPAWNING - Particles appear ON letters after splash
 // ============================================
 function spawnFromWave(waveZ) {
-    if (!particles || !textBBox) return;
+    if (!particles || !textBBox) {
+        console.warn('spawnFromWave: particles or textBBox not ready');
+        return;
+    }
     
-    const count = CONFIG.SPAWN_RATE;
-    const positions = new Float32Array(count * 3);
-    const velocities = new Float32Array(count * 3);
-    const sizes = new Float32Array(count);
-    const slideSpeeds = new Float32Array(count);
+    if (!particles.isReady()) {
+        console.warn('spawnFromWave: particle system not ready');
+        return;
+    }
     
-    // Text dimensions
+    const totalCount = CONFIG.SPAWN_RATE;
+    console.log(`Spawning ${totalCount} particles...`);
+    const positions = new Float32Array(totalCount * 3);
+    const velocities = new Float32Array(totalCount * 3);
+    const sizes = new Float32Array(totalCount);
+    const slideSpeeds = new Float32Array(totalCount);
+    
     const width = textBBox.max.x - textBBox.min.x;
     const height = textBBox.max.y - textBBox.min.y;
     const centerX = (textBBox.max.x + textBBox.min.x) / 2;
     const centerY = (textBBox.max.y + textBBox.min.y) / 2;
     
-    for (let i = 0; i < count; i++) {
-        // Spawn position - spread across text area
+    for (let i = 0; i < totalCount; i++) {
+        // Spawn position - spread across text area, in front of text
         positions[i * 3] = centerX + (Math.random() - 0.5) * width * 1.5;
         positions[i * 3 + 1] = centerY + (Math.random() - 0.5) * height * 1.5;
-        positions[i * 3 + 2] = 6 + Math.random() * 5;
+        positions[i * 3 + 2] = 6 + Math.random() * 5; // In front, will fly toward text
         
-        // Velocity: chaotic splash with configurable spread
+        // Velocity: toward text with spread
         const angle = Math.random() * Math.PI * 2;
         const spread = Math.random() * CONFIG.SPLASH_SPREAD_XY;
         velocities[i * 3] = Math.cos(angle) * spread + (Math.random() - 0.5) * 3;
@@ -353,8 +401,6 @@ function spawnFromWave(waveZ) {
         
         // Random drop sizes
         sizes[i] = CONFIG.DROP_SIZE_MIN + Math.random() * (CONFIG.DROP_SIZE_MAX - CONFIG.DROP_SIZE_MIN);
-        
-        // Random slide speed (0-1 range, used to stagger drip timing)
         slideSpeeds[i] = Math.random();
     }
     
@@ -951,8 +997,14 @@ async function animate() {
         updateInProgress = true;
         try {
             // Update returns a promise for WebGPU, resolves immediately for CPU
-            await particles.update(dt, time);
+            const activeCount = await particles.update(dt, time);
             syncParticleBuffers();
+            
+            // Debug: log particle stats every second
+            if (Math.floor(time) !== Math.floor(time - dt)) {
+                const onText = particles.countOnText ? particles.countOnText() : 0;
+                console.log(`Particles: total=${particles.count}, onText=${onText}`);
+            }
         } catch (err) {
             console.error('Particle update error:', err);
         }

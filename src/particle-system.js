@@ -168,6 +168,108 @@ class WorkerParticleSystem {
         }
     }
     
+    // Spawn particles directly on surface (STUCK state)
+    spawnOnSurface(count, sizes, stickTimes) {
+        if (!this.sdf) return 0;
+        
+        const { bbox, data, resolution, stepX, stepY, stepZ } = this.sdf;
+        let spawned = 0;
+        let attempts = 0;
+        const maxAttempts = count * 10;
+        
+        while (spawned < count && this.count < this.max && attempts < maxAttempts) {
+            attempts++;
+            
+            const x = bbox.min.x + Math.random() * (bbox.max.x - bbox.min.x);
+            const y = bbox.min.y + Math.random() * (bbox.max.y - bbox.min.y);
+            const z = bbox.max.z - Math.random() * 0.5;
+            
+            const dist = this.sampleSDF(x, y, z);
+            
+            if (dist < 0.3 && dist > -0.1) {
+                const grad = this.sdfGradient(x, y, z);
+                
+                if (grad.z > 0.3) {
+                    const idx = this.count++;
+                    
+                    this.posX[idx] = x + grad.x * (0.05 - dist);
+                    this.posY[idx] = y + grad.y * (0.05 - dist);
+                    this.posZ[idx] = z + grad.z * (0.05 - dist);
+                    this.velX[idx] = 0;
+                    this.velY[idx] = 0;
+                    this.velZ[idx] = 0;
+                    this.state[idx] = 1; // STUCK
+                    this.size[idx] = sizes[spawned % sizes.length];
+                    this.stickTime[idx] = stickTimes[spawned % stickTimes.length];
+                    this.slideSpeed[idx] = CONFIG.SLIDE_SPEED_MIN + Math.random() * (CONFIG.SLIDE_SPEED_MAX - CONFIG.SLIDE_SPEED_MIN);
+                    
+                    spawned++;
+                }
+            }
+        }
+        
+        return spawned;
+    }
+    
+    // Sample SDF (simplified version for worker system)
+    sampleSDF(x, y, z) {
+        if (!this.sdf) return 100;
+        
+        const { bbox, data, resolution, stepX, stepY, stepZ } = this.sdf;
+        
+        const fx = (x - bbox.min.x) / stepX - 0.5;
+        const fy = (y - bbox.min.y) / stepY - 0.5;
+        const fz = (z - bbox.min.z) / stepZ - 0.5;
+        
+        const x0 = Math.floor(fx), y0 = Math.floor(fy), z0 = Math.floor(fz);
+        
+        if (x0 < 0 || x0 >= resolution - 1 || y0 < 0 || y0 >= resolution - 1 || z0 < 0 || z0 >= resolution - 1) return 100;
+        
+        const tx = fx - x0, ty = fy - y0, tz = fz - z0;
+        const r = resolution, r2 = r * r;
+        const i000 = x0 + y0 * r + z0 * r2;
+        
+        const c00 = data[i000] * (1 - tx) + data[i000 + 1] * tx;
+        const c10 = data[i000 + r] * (1 - tx) + data[i000 + r + 1] * tx;
+        const c01 = data[i000 + r2] * (1 - tx) + data[i000 + r2 + 1] * tx;
+        const c11 = data[i000 + r2 + r] * (1 - tx) + data[i000 + r2 + r + 1] * tx;
+        
+        const c0 = c00 * (1 - ty) + c10 * ty;
+        const c1 = c01 * (1 - ty) + c11 * ty;
+        
+        return c0 * (1 - tz) + c1 * tz;
+    }
+    
+    // Get SDF gradient (surface normal)
+    sdfGradient(x, y, z) {
+        const eps = 0.1;
+        const dx = this.sampleSDF(x + eps, y, z) - this.sampleSDF(x - eps, y, z);
+        const dy = this.sampleSDF(x, y + eps, z) - this.sampleSDF(x, y - eps, z);
+        const dz = this.sampleSDF(x, y, z + eps) - this.sampleSDF(x, y, z - eps);
+        const len = Math.sqrt(dx*dx + dy*dy + dz*dz) || 1;
+        return { x: dx/len, y: dy/len, z: dz/len };
+    }
+    
+    // Spawn spray particles (BOUNCING state)
+    spawnSpray(positions, velocities, sizes) {
+        const count = positions.length / 3;
+        
+        for (let i = 0; i < count && this.count < this.max; i++) {
+            const idx = this.count++;
+            
+            this.posX[idx] = positions[i * 3];
+            this.posY[idx] = positions[i * 3 + 1];
+            this.posZ[idx] = positions[i * 3 + 2];
+            this.velX[idx] = velocities[i * 3];
+            this.velY[idx] = velocities[i * 3 + 1];
+            this.velZ[idx] = velocities[i * 3 + 2];
+            this.state[idx] = 5; // BOUNCING
+            this.size[idx] = sizes[i];
+            this.stickTime[idx] = 0;
+            this.slideSpeed[idx] = 0;
+        }
+    }
+    
     update(dt, time) {
         if (!this.ready || this.count === 0) return 0;
         
@@ -321,6 +423,29 @@ export class HybridParticleSystem {
             this.count = Math.min(this.count + spawnCount, this.maxParticles);
         } else if (this.backend) {
             this.backend.spawn(positions, velocities, sizes, slideSpeeds);
+            this.count = this.backend.count;
+        }
+    }
+    
+    // Spawn particles directly on surface in STUCK state
+    spawnOnSurface(count, sizes, stickTimes) {
+        if (!this.backendType) return 0;
+        
+        // Only CPU backends support surface spawning currently
+        if (this.backend && this.backend.spawnOnSurface) {
+            const spawned = this.backend.spawnOnSurface(count, sizes, stickTimes);
+            this.count = this.backend.count;
+            return spawned;
+        }
+        return 0;
+    }
+    
+    // Spawn spray particles (start in BOUNCING state, visible immediately)
+    spawnSpray(positions, velocities, sizes) {
+        if (!this.backendType) return;
+        
+        if (this.backend && this.backend.spawnSpray) {
+            this.backend.spawnSpray(positions, velocities, sizes);
             this.count = this.backend.count;
         }
     }

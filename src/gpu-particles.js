@@ -391,7 +391,7 @@ export class ParticleSystem {
         out.z = dz / len;
     }
     
-    // Spawn particles
+    // Spawn particles (flying toward text)
     spawn(positions, velocities, sizes, slideSpeeds) {
         const count = positions.length / 3;
         
@@ -408,6 +408,77 @@ export class ParticleSystem {
             this.size[idx] = sizes[i];
             this.stickTime[idx] = 0;
             this.slideSpeed[idx] = slideSpeeds[i];
+        }
+    }
+    
+    // Spawn particles directly on surface (already stuck - post-splash)
+    spawnOnSurface(count, sizes, stickTimes) {
+        if (!this.sdf) return 0;
+        
+        const { bbox } = this.sdf;
+        const normal = { x: 0, y: 0, z: 0 };
+        let spawned = 0;
+        let attempts = 0;
+        const maxAttempts = count * 10; // Avoid infinite loop
+        
+        while (spawned < count && this.count < this.max && attempts < maxAttempts) {
+            attempts++;
+            
+            // Random point in bounding box
+            const x = bbox.min.x + Math.random() * (bbox.max.x - bbox.min.x);
+            const y = bbox.min.y + Math.random() * (bbox.max.y - bbox.min.y);
+            const z = bbox.max.z - Math.random() * 0.5; // Near front face
+            
+            // Check if near surface
+            const dist = this.sampleSDF(x, y, z);
+            
+            if (dist < 0.3 && dist > -0.1) {
+                // Get surface normal
+                this.sdfGradient(x, y, z, normal);
+                
+                // Only spawn on front-facing surfaces
+                if (normal.z > 0.3) {
+                    const idx = this.count++;
+                    
+                    // Push to surface
+                    this.posX[idx] = x + normal.x * (0.05 - dist);
+                    this.posY[idx] = y + normal.y * (0.05 - dist);
+                    this.posZ[idx] = z + normal.z * (0.05 - dist);
+                    
+                    this.velX[idx] = 0;
+                    this.velY[idx] = 0;
+                    this.velZ[idx] = 0;
+                    
+                    this.state[idx] = STUCK;
+                    this.size[idx] = sizes[spawned % sizes.length];
+                    this.stickTime[idx] = stickTimes[spawned % stickTimes.length];
+                    this.slideSpeed[idx] = CONFIG.SLIDE_SPEED_MIN + Math.random() * (CONFIG.SLIDE_SPEED_MAX - CONFIG.SLIDE_SPEED_MIN);
+                    
+                    spawned++;
+                }
+            }
+        }
+        
+        return spawned;
+    }
+    
+    // Spawn bouncing spray particles (visible splash effect)
+    spawnSpray(positions, velocities, sizes) {
+        const count = positions.length / 3;
+        
+        for (let i = 0; i < count && this.count < this.max; i++) {
+            const idx = this.count++;
+            
+            this.posX[idx] = positions[i * 3];
+            this.posY[idx] = positions[i * 3 + 1];
+            this.posZ[idx] = positions[i * 3 + 2];
+            this.velX[idx] = velocities[i * 3];
+            this.velY[idx] = velocities[i * 3 + 1];
+            this.velZ[idx] = velocities[i * 3 + 2];
+            this.state[idx] = BOUNCING; // Start as bouncing (visible spray)
+            this.size[idx] = sizes[i];
+            this.stickTime[idx] = 0;
+            this.slideSpeed[idx] = 0;
         }
     }
     
