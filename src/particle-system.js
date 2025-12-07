@@ -186,10 +186,10 @@ class WorkerParticleSystem {
             
             const dist = this.sampleSDF(x, y, z);
             
-            if (dist < 0.3 && dist > -0.1) {
+            // Sólo puntos muy cercanos a la superficie frontal del texto
+            if (dist > -0.05 && dist < 0.18) {
                 const grad = this.sdfGradient(x, y, z);
-                
-                if (grad.z > 0.3) {
+                if (grad.z > 0.2) {
                     const idx = this.count++;
                     
                     this.posX[idx] = x + grad.x * (0.05 - dist);

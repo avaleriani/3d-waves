@@ -206,9 +206,9 @@ function createParticleRenderer() {
                 vState = state.x;
                 vSize = state.z;
                 
-                // Hide FALLING (0) and INACTIVE (4) particles
-                // Show STUCK (1), SLIDING (2), DRIPPING (3), BOUNCING (5)
-                if (vState < 0.5 || (vState > 3.5 && vState < 4.5) || vSize < 0.01) {
+                // Hide only INACTIVE (4) particles or tiny ones
+                // Show FALLING (0), STUCK (1), SLIDING (2), DRIPPING (3), BOUNCING (5)
+                if ((vState > 3.5 && vState < 4.5) || vSize < 0.01) {
                     gl_Position = vec4(0.0, 0.0, -1000.0, 1.0);
                     gl_PointSize = 0.0;
                     return;
@@ -219,12 +219,18 @@ function createParticleRenderer() {
                 gl_Position = projectionMatrix * mvPos;
                 
                 float dist = length(mvPos.xyz);
+                float size = vSize;
+                
+                // Make FALLING particles noticeably smaller for a softer, subtle spray
+                if (vState < 0.5) {
+                    size *= 0.5;
+                }
                 
                 // Configurable size attenuation
                 if (sizeAttenuation > 0.5) {
-                    gl_PointSize = vSize * (400.0 / dist);
+                    gl_PointSize = size * (400.0 / dist);
                 } else {
-                    gl_PointSize = vSize * 25.0;
+                    gl_PointSize = size * 25.0;
                 }
                 gl_PointSize = clamp(gl_PointSize, 1.0, 64.0);
                 
@@ -245,11 +251,16 @@ function createParticleRenderer() {
             varying float vDepthFade;
             
             void main() {
-                // Only render visible particles
-                if (vState < 0.5 || (vState > 3.5 && vState < 4.5) || vSize < 0.01) discard;
+                // Only skip INACTIVE or tiny particles
+                // Subimos el umbral de tamaño para no dibujar niebla de gotitas ultra pequeñas
+                if ((vState > 3.5 && vState < 4.5) || vSize < 0.02) discard;
                 
-                // Circular shape with smooth edge
+                // Shape: base circular, but FALLING particles are stretched vertically
                 vec2 center = gl_PointCoord - 0.5;
+                if (vState < 0.5) {
+                    // Stretch along Y so the falling water looks more like a stream
+                    center.y *= 1.8;
+                }
                 float dist = length(center);
                 if (dist > 0.5) discard;
                 
@@ -304,8 +315,12 @@ function createParticleRenderer() {
                 float rimHighlight = smoothstep(0.32, 0.42, dist) * (1.0 - smoothstep(0.42, 0.5, dist));
                 color += vec3(0.9, 0.95, 1.0) * rimHighlight * 0.9;
                 
-                // State-based color variations
-                if (vState > 4.5) {
+                // State-based color/alpha variations
+                if (vState < 0.5) {
+                    // FALLING (0) - dimmer and more transparent, but still readable as a water stream
+                    color *= 0.88;
+                    alpha *= 0.26;
+                } else if (vState > 4.5) {
                     // BOUNCING (5) - more energetic, slightly brighter
                     color *= 1.1;
                     color += vec3(0.1, 0.15, 0.2) * fresnel;
@@ -374,29 +389,54 @@ function spawnFromWave(waveZ) {
         return;
     }
     
-    const totalCount = CONFIG.SPAWN_RATE;
-    console.log(`Spawning ${totalCount} particles...`);
-    const positions = new Float32Array(totalCount * 3);
-    const velocities = new Float32Array(totalCount * 3);
-    const sizes = new Float32Array(totalCount);
-    const slideSpeeds = new Float32Array(totalCount);
-    
     const width = textBBox.max.x - textBBox.min.x;
     const height = textBBox.max.y - textBBox.min.y;
     const centerX = (textBBox.max.x + textBBox.min.x) / 2;
     const centerY = (textBBox.max.y + textBBox.min.y) / 2;
+    const totalCount = CONFIG.SPAWN_RATE;
+    console.log(`Spawning ${totalCount} particles...`);
+
+    // Fase 1: capa de agua pegada a las letras (STUCK/SLIDING)
+    // Gran parte del baldazo se coloca directamente sobre la superficie del texto.
+    const surfaceRatio = 0.7;
+    const surfaceCount = Math.floor(totalCount * surfaceRatio);
+    const flyingTarget = totalCount - surfaceCount;
+    let spawnedSurface = 0;
     
-    for (let i = 0; i < totalCount; i++) {
-        // Spawn position - spread across text area, in front of text
-        positions[i * 3] = centerX + (Math.random() - 0.5) * width * 1.5;
-        positions[i * 3 + 1] = centerY + (Math.random() - 0.5) * height * 1.5;
-        positions[i * 3 + 2] = 6 + Math.random() * 5; // In front, will fly toward text
+    if (surfaceCount > 0 && particles.spawnOnSurface) {
+        const surfaceSizes = new Float32Array(surfaceCount);
+        const stickTimes = new Float32Array(surfaceCount);
+        
+        for (let i = 0; i < surfaceCount; i++) {
+            surfaceSizes[i] = CONFIG.DROP_SIZE_MIN + Math.random() * (CONFIG.DROP_SIZE_MAX - CONFIG.DROP_SIZE_MIN);
+            // Empezar con distintos "progresos" de stick para que unas gotas se suelten antes
+            stickTimes[i] = Math.random() * CONFIG.STICK_DURATION_MIN;
+        }
+        
+        spawnedSurface = particles.spawnOnSurface(surfaceCount, surfaceSizes, stickTimes) || 0;
+    }
+    
+    // Fase 2: agua volando desde la ola hacia las letras (FALLING -> impacto)
+    const flyingCount = spawnedSurface > 0 ? flyingTarget : totalCount; // fallback WebGPU: todo es flying
+    if (flyingCount <= 0) return;
+    
+    const positions = new Float32Array(flyingCount * 3);
+    const velocities = new Float32Array(flyingCount * 3);
+    const sizes = new Float32Array(flyingCount);
+    const slideSpeeds = new Float32Array(flyingCount);
+    
+    for (let i = 0; i < flyingCount; i++) {
+        // Spawn position - cubrir prácticamente todo el ancho/alto del texto
+        positions[i * 3] = centerX + (Math.random() - 0.5) * width * 1.2;
+        positions[i * 3 + 1] = centerY + (Math.random() - 0.5) * height * 1.1;
+        // Use waveZ so the splash clearly travels from the wave toward the text
+        positions[i * 3 + 2] = waveZ + (Math.random() - 0.5) * 2.0;
         
         // Velocity: toward text with spread
         const angle = Math.random() * Math.PI * 2;
         const spread = Math.random() * CONFIG.SPLASH_SPREAD_XY;
-        velocities[i * 3] = Math.cos(angle) * spread + (Math.random() - 0.5) * 3;
-        velocities[i * 3 + 1] = Math.sin(angle) * spread + (Math.random() - 0.5) * 5;
+        velocities[i * 3] = Math.cos(angle) * spread + (Math.random() - 0.5) * 2.0;
+        velocities[i * 3 + 1] = Math.sin(angle) * spread + (Math.random() - 0.5) * 4.0;
         velocities[i * 3 + 2] = CONFIG.SPLASH_VELOCITY_Z - Math.random() * CONFIG.SPLASH_VELOCITY_SPREAD;
         
         // Random drop sizes

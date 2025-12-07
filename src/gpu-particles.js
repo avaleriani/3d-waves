@@ -432,12 +432,11 @@ export class ParticleSystem {
             // Check if near surface
             const dist = this.sampleSDF(x, y, z);
             
-            if (dist < 0.3 && dist > -0.1) {
+            // Sólo puntos muy cercanos a la superficie frontal del texto
+            if (dist > -0.05 && dist < 0.18) {
                 // Get surface normal
                 this.sdfGradient(x, y, z, normal);
-                
-                // Only spawn on front-facing surfaces
-                if (normal.z > 0.3) {
+                if (normal.z > 0.2) {
                     const idx = this.count++;
                     
                     // Push to surface

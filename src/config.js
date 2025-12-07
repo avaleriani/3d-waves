@@ -26,7 +26,7 @@
  *   Low-end laptop: use 200,000
  *   Gaming PC: use 1,000,000 - 2,000,000
  */
-export const MAX_PARTICLES = 2000000;
+export const MAX_PARTICLES = 4000000;
 
 /**
  * SPAWN_RATE - How many particles spawn per frame during splash
@@ -39,7 +39,7 @@ export const MAX_PARTICLES = 2000000;
  * 
  * NOTE: Higher values fill up MAX_PARTICLES faster
  */
-export const SPAWN_RATE = 55000;
+export const SPAWN_RATE = 45000;
 
 /**
  * SDF_RESOLUTION - 3D collision grid accuracy
@@ -94,7 +94,7 @@ export const VIDEO_LOOP_DURATION = 10.0;
  *   -45  → Fast, aggressive splash
  *   -60  → Violent impact, lots of spray
  */
-export const SPLASH_VELOCITY_Z = -32;
+export const SPLASH_VELOCITY_Z = -28;
 
 /**
  * SPLASH_VELOCITY_SPREAD - Random variation in impact speed
@@ -104,7 +104,7 @@ export const SPLASH_VELOCITY_Z = -32;
  *   12  → Natural variation
  *   25  → Chaotic, some drops much faster than others
  */
-export const SPLASH_VELOCITY_SPREAD = 14;
+export const SPLASH_VELOCITY_SPREAD = 10;
 
 /**
  * SPLASH_SPREAD_XY - How wide the splash spreads horizontally/vertically
@@ -114,7 +114,7 @@ export const SPLASH_VELOCITY_SPREAD = 14;
  *   3.5 → Natural splash width
  *   8   → Wide spray, covers more area
  */
-export const SPLASH_SPREAD_XY = 4.0;
+export const SPLASH_SPREAD_XY = 3.0;
 
 /**
  * SPLASH_UPWARD_BIAS - Tendency for drops to bounce upward
@@ -124,7 +124,7 @@ export const SPLASH_SPREAD_XY = 4.0;
  *   2.5 → Natural upward spray
  *   6   → Exaggerated fountain effect
  */
-export const SPLASH_UPWARD_BIAS = 3.0;
+export const SPLASH_UPWARD_BIAS = 2.0;
 
 
 // ════════════════════════════════════════════════════════════════════════════════
@@ -140,7 +140,7 @@ export const SPLASH_UPWARD_BIAS = 3.0;
  *   0.6  → Lots of spray, less sticking
  *   0.9  → Almost all drops bounce off, like hitting glass
  */
-export const BOUNCE_CHANCE = 0.4;
+export const BOUNCE_CHANCE = 0.25;
 
 /**
  * BOUNCE_RESTITUTION_MIN/MAX - Energy kept after bounce (0 to 1)
@@ -150,8 +150,8 @@ export const BOUNCE_CHANCE = 0.4;
  *   Medium (0.3-0.5) → Natural water behavior
  *   High (0.6-0.8) → Bouncy, like rubber balls
  */
-export const BOUNCE_RESTITUTION_MIN = 0.15;
-export const BOUNCE_RESTITUTION_MAX = 0.5;
+export const BOUNCE_RESTITUTION_MIN = 0.1;
+export const BOUNCE_RESTITUTION_MAX = 0.4;
 
 /**
  * BOUNCE_SCATTER - Random scatter velocity after bounce
@@ -161,7 +161,7 @@ export const BOUNCE_RESTITUTION_MAX = 0.5;
  *   4   → Natural scatter
  *   10  → Chaotic spray in all directions
  */
-export const BOUNCE_SCATTER = 5;
+export const BOUNCE_SCATTER = 3;
 
 /**
  * BOUNCE_SCATTER_VERTICAL - Extra upward scatter for spray effect
@@ -171,7 +171,7 @@ export const BOUNCE_SCATTER = 5;
  *   6   → Natural upward spray
  *   12  → Tall fountain spray
  */
-export const BOUNCE_SCATTER_VERTICAL = 7;
+export const BOUNCE_SCATTER_VERTICAL = 4;
 
 /**
  * BOUNCE_DRAG - Air resistance on bouncing drops (0.9 to 1)
@@ -191,7 +191,7 @@ export const BOUNCE_DRAG = 0.93;
  *   0.12 → Natural radial splash pattern
  *   0.25 → Exaggerated starburst spray
  */
-export const IMPACT_SPRAY_FACTOR = 0.15;
+export const IMPACT_SPRAY_FACTOR = 0.1;
 
 
 // ════════════════════════════════════════════════════════════════════════════════
@@ -206,8 +206,8 @@ export const IMPACT_SPRAY_FACTOR = 0.15;
  *   3-5     → Natural delay before sliding
  *   8-15    → Water clings to letters for a long time
  */
-export const STICK_DURATION_MIN = 2.5;
-export const STICK_DURATION_MAX = 6.0;
+export const STICK_DURATION_MIN = 1.0;
+export const STICK_DURATION_MAX = 2.5;
 
 /**
  * SLIDE_SPEED_MIN/MAX - How fast drops slide down letters
@@ -217,8 +217,8 @@ export const STICK_DURATION_MAX = 6.0;
  *   0.3-0.7 → Natural water slide
  *   1.0-2.0 → Fast slide, water races down
  */
-export const SLIDE_SPEED_MIN = 0.25;
-export const SLIDE_SPEED_MAX = 0.8;
+export const SLIDE_SPEED_MIN = 0.4;
+export const SLIDE_SPEED_MAX = 0.7;
 
 /**
  * SLIDE_DURATION_MIN/MAX - How long drops slide before dripping off (seconds)
@@ -228,8 +228,8 @@ export const SLIDE_SPEED_MAX = 0.8;
  *   5-10  → Natural slide duration
  *   15-25 → Water slides for a long time, trails down letters
  */
-export const SLIDE_DURATION_MIN = 4.0;
-export const SLIDE_DURATION_MAX = 12.0;
+export const SLIDE_DURATION_MIN = 2.0;
+export const SLIDE_DURATION_MAX = 6.0;
 
 
 // ════════════════════════════════════════════════════════════════════════════════
@@ -244,7 +244,7 @@ export const SLIDE_DURATION_MAX = 12.0;
  *   -1   → Small initial velocity (natural)
  *   -5   → Drop is already falling when it detaches
  */
-export const DRIP_INITIAL_VELOCITY = -0.8;
+export const DRIP_INITIAL_VELOCITY = -1.6;
 
 /**
  * DRIP_GRAVITY - Gravity strength (negative = downward)
@@ -274,7 +274,7 @@ export const DRIP_REMOVE_Y = -20;
 /**
  * DRIP_MIN_SIZE - Minimum size before drop is removed
  */
-export const DRIP_MIN_SIZE = 0.01;
+export const DRIP_MIN_SIZE = 0.02;
 
 
 // ════════════════════════════════════════════════════════════════════════════════
@@ -289,8 +289,8 @@ export const DRIP_MIN_SIZE = 0.01;
  *   0.04-0.14 → Natural water drops
  *   0.08-0.25 → Large, visible drops (cartoon-like)
  */
-export const DROP_SIZE_MIN = 0.03;
-export const DROP_SIZE_MAX = 0.16;
+export const DROP_SIZE_MIN = 0.04;
+export const DROP_SIZE_MAX = 0.18;
 
 /**
  * BOUNCE_SIZE_REDUCTION - How much drops shrink when bouncing (0 to 1)
@@ -300,7 +300,7 @@ export const DROP_SIZE_MAX = 0.16;
  *   0.5  → Drops shrink to half size (creates mist)
  *   0.2  → Drops become tiny mist particles
  */
-export const BOUNCE_SIZE_REDUCTION = 0.45;
+export const BOUNCE_SIZE_REDUCTION = 0.7;
 
 /**
  * MIST_SIZE_FACTOR - Additional shrink for high-speed impacts
@@ -310,7 +310,7 @@ export const BOUNCE_SIZE_REDUCTION = 0.45;
  *   0.3  → Natural mist generation
  *   0.5  → Lots of fine mist spray
  */
-export const MIST_SIZE_FACTOR = 0.35;
+export const MIST_SIZE_FACTOR = 0.2;
 
 
 // ════════════════════════════════════════════════════════════════════════════════
